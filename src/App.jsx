@@ -373,13 +373,16 @@ export default function App() {
 
     for (const cfg of SHEET_TARGETS) {
       let csvText = null;
+      console.log(`📡 [${cfg.label}] 데이터 로딩 시작... gid=${cfg.gid}`);
 
       // 1차: Visualization API
       try {
         const vizUrl = `https://docs.google.com/spreadsheets/d/${ORIG_SHEET_ID}/gviz/tq?tqx=out:csv&gid=${cfg.gid}`;
         const res = await fetch(vizUrl);
+        console.log(`📡 [${cfg.label}] Viz API 응답:`, res.status, res.ok);
         if (res.ok) {
           const text = await res.text();
+          console.log(`📡 [${cfg.label}] Viz API 텍스트 길이:`, text.length);
           if (text && text.length > 10) csvText = { text, method:"Viz API" };
         }
       } catch(e) { console.warn(`[${cfg.label}] Viz API 실패:`, e.message); }
@@ -437,6 +440,7 @@ export default function App() {
         }
 
         const rows = parseResponseCSV(csvText.text, cfg.country, cfg.platform, currentColMap);
+        console.log(`✅ [${cfg.label}] 파싱 결과: ${rows.length}건`);
         allRows.push(...rows);
         statusLog.push({ label:cfg.label, count:rows.length, ok:true, method:csvText.method });
       } else {
