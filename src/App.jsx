@@ -19,7 +19,7 @@ const PUB_ID = "2PACX-1vSMjDEGcigtv5CjFVyN1Oi_cUj0VW1pKHWNl_Z5O9_kcmXPfH7c6GYP5y
 
 const SHEET_TARGETS = [
   { label:"한국 AOS", country:"한국", platform:"Google", gid:"0" },
-  // { label:"한국 iOS", country:"한국", platform:"iOS", gid:"여기에_GID" },
+  { label:"한국 iOS", country:"한국", platform:"iOS", gid:"123906372" },
   // { label:"일본 AOS", country:"일본", platform:"Google", gid:"여기에_GID" },
   // { label:"일본 iOS", country:"일본", platform:"iOS", gid:"여기에_GID" },
 ];
@@ -105,7 +105,7 @@ function parseResponseCSV(text, country, platform, colMap) {
   if (allRows.length < 2) return [];
   const headers = allRows[0];
 
-  // 컬럼 인덱스 매핑 (AI 결과 또는 기본값)
+  // 컬럼 인덱스 매핑 — 헤더명으로 자동 탐지 (AI 결과는 fallback)
   const findCol = (names) => {
     for (const name of names) {
       const idx = headers.findIndex(h => h && h.trim().toLowerCase().includes(name.toLowerCase()));
@@ -114,21 +114,34 @@ function parseResponseCSV(text, country, platform, colMap) {
     return -1;
   };
 
-  // colMap이 있으면 AI 결과 사용, 없으면 자동 탐지
-  const ci = {
-    date:           colMap?.date != null ? headers.indexOf(colMap.date) : findCol(["Date", "date", "날짜"]),
-    openid:         colMap?.openid != null ? headers.indexOf(colMap.openid) : findCol(["openid", "OPENID", "OpenID"]),
-    cancelOrderNo:  colMap?.cancelOrderNo != null ? headers.indexOf(colMap.cancelOrderNo) : findCol(["결제취소 주문번호", "결제취소 주문"]),
-    cancelProduct:  colMap?.cancelProduct != null ? headers.indexOf(colMap.cancelProduct) : findCol(["결제취소 상품명", "결제취소 상품"]),
-    requestDate:    colMap?.requestDate != null ? headers.indexOf(colMap.requestDate) : findCol(["해제 요청 일시", "해제 요청"]),
-    ticketNo:       colMap?.ticketNo != null ? headers.indexOf(colMap.ticketNo) : findCol(["Ticket NO", "Ticket", "티켓"]),
-    releaseDate:    colMap?.releaseDate != null ? headers.indexOf(colMap.releaseDate) : findCol(["해제 일시", "해제일시"]),
-    rechargeOrderNo: colMap?.rechargeOrderNo != null ? headers.indexOf(colMap.rechargeOrderNo) : findCol(["재결제 주문번호", "재결제 주문"]),
-    rechargeProduct: colMap?.rechargeProduct != null ? headers.indexOf(colMap.rechargeProduct) : findCol(["재결제 상품명", "재결제 상품"]),
-    rechargeAmount:  colMap?.rechargeAmount != null ? headers.indexOf(colMap.rechargeAmount) : findCol(["재결제 금액"]),
-    processDate:    colMap?.processDate != null ? headers.indexOf(colMap.processDate) : findCol(["처리날짜", "처리일"]),
-    processResult:  colMap?.processResult != null ? headers.indexOf(colMap.processResult) : findCol(["처리결과"]),
+  // 항상 자동 탐지 우선, 못 찾으면 AI 결과 사용
+  const autoOrAI = (names, aiKey) => {
+    const auto = findCol(names);
+    if (auto >= 0) return auto;
+    if (colMap?.[aiKey] != null) {
+      const aiIdx = headers.indexOf(colMap[aiKey]);
+      if (aiIdx >= 0) return aiIdx;
+    }
+    return -1;
   };
+
+  const ci = {
+    date:           autoOrAI(["Date", "date", "날짜", "등록일"], "date"),
+    openid:         autoOrAI(["openid", "OPENID", "OpenID", "오픈ID", "오픈id"], "openid"),
+    cancelOrderNo:  autoOrAI(["결제취소 주문번호", "결제취소 주문"], "cancelOrderNo"),
+    cancelProduct:  autoOrAI(["결제취소 상품명", "결제취소 상품"], "cancelProduct"),
+    requestDate:    autoOrAI(["해제 요청 일시", "해제 요청"], "requestDate"),
+    ticketNo:       autoOrAI(["Ticket NO", "Ticket", "티켓"], "ticketNo"),
+    releaseDate:    autoOrAI(["해제 일시", "해제일시"], "releaseDate"),
+    rechargeOrderNo: autoOrAI(["재결제 주문번호", "재결제 주문"], "rechargeOrderNo"),
+    rechargeProduct: autoOrAI(["재결제 상품명", "재결제 상품"], "rechargeProduct"),
+    rechargeAmount:  autoOrAI(["재결제 금액"], "rechargeAmount"),
+    processDate:    autoOrAI(["처리날짜", "처리일", "처리 날짜"], "processDate"),
+    processResult:  autoOrAI(["처리결과", "처리 결과"], "processResult"),
+  };
+
+  console.log("📊 컬럼 매핑:", headers.map((h,i)=>`${i}:${h}`).join(" | "));
+  console.log("📊 매핑 결과:", JSON.stringify(ci));
 
   const get = (row, idx) => (idx >= 0 && idx < row.length) ? row[idx] : "";
 
