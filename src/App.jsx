@@ -39,7 +39,14 @@ function parseDate(val) {
   }
   return null;
 }
-function parseAmount(v) { return parseFloat(String(v||0).replace(/[^0-9.]/g,""))||0; }
+function parseAmount(v) { 
+  const s = String(v||"").replace(/[₩원\s]/g,"").trim();
+  if (!s) return 0;
+  // 숫자와 쉼표, 마침표만 추출
+  const m = s.match(/([\d,]+\.?\d*)/);
+  if (!m) return 0;
+  return parseFloat(m[1].replace(/,/g,"")) || 0;
+}
 function parseUC(t) { const m=String(t||"").match(/(\d[\d,]*)/); return m?parseInt(m[1].replace(/,/g,"")):0; }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -126,36 +133,64 @@ function parseResponseCSV(text, country, platform, colMap) {
   const get = (row, idx) => (idx >= 0 && idx < row.length) ? row[idx] : "";
 
   const results = [];
+  let lastDate = null; // 이전 행의 날짜를 기억
 
   for (let i = 1; i < allRows.length; i++) {
     const row = allRows[i];
     if (!row || row.length < 3) continue;
+    // 완전히 빈 행 스킵
+    if (row.every(c => !c || c.trim() === "")) continue;
 
     const dateRaw = get(row, ci.date);
     const openid = get(row, ci.openid);
+    const processDateRaw = get(row, ci.processDate).trim();
     const resultText = get(row, ci.processResult).trim();
+
+    // N열(처리날짜)과 O열(처리결과) 합쳐서 분석 — 초기 데이터는 N열에 결과가 같이 있음
+    const combinedText = (processDateRaw + " " + resultText).trim();
+
+    // 날짜 파싱 — 없으면 이전 행의 날짜 사용
+    let dateParsed = parseDate(dateRaw);
+    if (dateParsed) {
+      lastDate = dateParsed;
+    } else {
+      dateParsed = lastDate;
+    }
 
     // openid가 없으면 스킵
     if (!openid || openid.trim() === "") continue;
-
-    // 날짜 파싱
-    const dateParsed = parseDate(dateRaw);
-    if (!dateParsed) continue; // 날짜 없으면 스킵
+    // 날짜가 여전히 없으면 스킵
+    if (!dateParsed) continue;
 
     const [year, month, day] = dateParsed.split("-").map(Number);
 
-    // 처리결과 판단
+    // 처리날짜에서 실제 날짜만 추출
+    const processDateParsed = parseDate(processDateRaw);
+
+    // 처리결과 판단 — N열+O열 합쳐서 키워드 탐색
     let status = "처리중";
     let resanctioned = false;
-    if (resultText === "") {
+    let displayResult = resultText || "";
+
+    // O열이 비어있으면 N열에서 결과 텍스트 추출 시도
+    if (!resultText && processDateRaw) {
+      // N열에서 날짜 부분 제거 후 남은 텍스트를 결과로 사용
+      const withoutDate = processDateRaw.replace(/\d{4}[-\/]\d{1,2}[-\/]\d{1,2}/g, "").trim();
+      if (withoutDate) displayResult = withoutDate;
+    }
+
+    if (combinedText === "") {
       status = "처리중";
-    } else if (resultText.includes("회수") || resultText.includes("완료") || resultText.includes("해제")) {
+    } else if (combinedText.includes("회수") || combinedText.includes("해제")) {
       status = "복구완료";
-    } else if (resultText.includes("정지") || resultText.includes("재제재") || resultText.includes("제재")) {
+    } else if (combinedText.includes("다시 제재") || combinedText.includes("다시제재") || 
+               combinedText.includes("재제재") || combinedText.includes("하지 않아") || 
+               combinedText.includes("정지") || combinedText.includes("제재 진행")) {
       status = "재제재";
       resanctioned = true;
-    } else {
-      status = "복구완료"; // 기타 내용이 있으면 처리된 것
+    } else if (processDateRaw || resultText) {
+      // N열이나 O열에 뭔가 적혀있으면 처리된 것으로 간주
+      status = "복구완료";
     }
 
     results.push({
@@ -173,8 +208,8 @@ function parseResponseCSV(text, country, platform, colMap) {
       rechargeOrderNo: get(row, ci.rechargeOrderNo),
       rechargeProduct: get(row, ci.rechargeProduct),
       rechargeAmount: parseAmount(get(row, ci.rechargeAmount)),
-      processDate: get(row, ci.processDate),
-      processResult: resultText,
+      processDate: processDateParsed || processDateRaw,
+      processResult: displayResult || resultText,
       status,
       resanctioned,
     });
@@ -750,7 +785,6 @@ export default function App() {
             <Card icon="✅" label="복구완료" value={fmt(respSummary.recovered)} sub={`${respSummary.uniqueUsers?Math.round(respSummary.recovered/respSummary.uniqueUsers*100):0}%`} color="#22c55e"/>
             <Card icon="⏳" label="처리중" value={fmt(respSummary.processing)} sub={`${respSummary.uniqueUsers?Math.round(respSummary.processing/respSummary.uniqueUsers*100):0}%`} color="#22d3ee"/>
             <Card icon="🚫" label="재제재" value={fmt(respSummary.resanctioned)} sub={`${respSummary.uniqueUsers?Math.round(respSummary.resanctioned/respSummary.uniqueUsers*100):0}%`} color="#ef4444"/>
-            <Card icon="💰" label="재결제금액" value={fmtKRW(respSummary.totalAmount)} color="#f59e0b"/>
           </div>
 
           {/* 대응현황 추이 차트 */}
@@ -819,7 +853,7 @@ export default function App() {
             <div style={{overflowX:"auto"}}>
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
                 <thead><tr style={{borderBottom:"1px solid #334155"}}>
-                  {["날짜","OpenID","결제취소 상품","해제요청일","해제일시","재결제상품","재결제금액","처리날짜","처리결과","상태"].map(h=>(
+                  {["문의일","OpenID","해제일시","처리날짜","처리결과","상태"].map(h=>(
                     <th key={h} style={{padding:"6px 8px",textAlign:"left",color:"#64748b",whiteSpace:"nowrap"}}>{h}</th>
                   ))}
                 </tr></thead>
@@ -827,14 +861,10 @@ export default function App() {
                   {respFiltered.slice(-50).reverse().map((r,i)=>(
                     <tr key={i} style={{borderBottom:"1px solid #0f172a",background:i%2===0?"#0f172a":"transparent"}}>
                       <td style={{padding:"6px 8px",color:"#94a3b8",whiteSpace:"nowrap"}}>{r.date}</td>
-                      <td style={{padding:"6px 8px",color:"#e2e8f0",fontSize:10,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis"}}>{r.openid}</td>
-                      <td style={{padding:"6px 8px",color:"#e2e8f0",whiteSpace:"nowrap",maxWidth:150,overflow:"hidden",textOverflow:"ellipsis"}}>{r.cancelProduct||"-"}</td>
-                      <td style={{padding:"6px 8px",color:"#f59e0b",whiteSpace:"nowrap"}}>{r.requestDate||"-"}</td>
+                      <td style={{padding:"6px 8px",color:"#e2e8f0",fontSize:10,maxWidth:160,overflow:"hidden",textOverflow:"ellipsis"}}>{r.openid}</td>
                       <td style={{padding:"6px 8px",color:"#22d3ee",whiteSpace:"nowrap"}}>{r.releaseDate||"-"}</td>
-                      <td style={{padding:"6px 8px",color:"#e2e8f0",whiteSpace:"nowrap",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis"}}>{r.rechargeProduct||"-"}</td>
-                      <td style={{padding:"6px 8px",color:"#22d3ee",whiteSpace:"nowrap"}}>{r.rechargeAmount?fmtKRW(r.rechargeAmount):"-"}</td>
                       <td style={{padding:"6px 8px",color:"#94a3b8",whiteSpace:"nowrap"}}>{r.processDate||"-"}</td>
-                      <td style={{padding:"6px 8px",color:"#94a3b8",whiteSpace:"nowrap",maxWidth:150,overflow:"hidden",textOverflow:"ellipsis"}}>{r.processResult||"-"}</td>
+                      <td style={{padding:"6px 8px",color:"#e2e8f0",maxWidth:200,overflow:"hidden",textOverflow:"ellipsis"}}>{r.processResult||"-"}</td>
                       <td style={{padding:"6px 8px"}}>
                         <span style={{padding:"2px 7px",borderRadius:4,fontSize:10,whiteSpace:"nowrap",
                           background:r.resanctioned?"#450a0a":r.status==="복구완료"?"#14532d":"#164e63",
@@ -1114,44 +1144,84 @@ function UserSearch({refundData, responseData}) {
       )}
       {res && (res.refunds.length>0||res.responses.length>0) && (
         <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          {/* 유저 요약 */}
           <div style={{background:"#1e293b",borderRadius:12,padding:16,borderLeft:"4px solid #6366f1"}}>
             <div style={{fontWeight:700,fontSize:14,marginBottom:10}}>👤 {res.q}</div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
               {[["환불건수",res.refunds.length+"건","#22d3ee"],
                 ["총환불금액","₩"+res.refunds.reduce((s,d)=>s+(d.amount||0),0).toLocaleString(),"#ef4444"],
                 ["대응내역",res.responses.length+"건","#f59e0b"],
-                ["최종상태",res.responses.length?res.responses[res.responses.length-1].status:"-","#22c55e"],
+                ["최종상태",res.responses.length?res.responses[res.responses.length-1].status:"-",
+                  res.responses.length?(res.responses[res.responses.length-1].status==="복구완료"?"#22c55e":
+                  res.responses[res.responses.length-1].status==="재제재"?"#ef4444":"#22d3ee"):"#64748b"],
               ].map(([l,v,c])=>(<div key={l} style={{background:"#0f172a",borderRadius:8,padding:"8px 14px"}}>
                 <div style={{fontSize:10,color:"#64748b"}}>{l}</div>
                 <div style={{fontSize:14,fontWeight:700,color:c,marginTop:2}}>{v}</div></div>))}
             </div>
           </div>
-          {res.responses.length>0 && (
+
+          {/* 환불 주문 내역 */}
+          {res.refunds.length>0 && (
             <div style={{background:"#1e293b",borderRadius:12,padding:16}}>
-              <div style={{fontSize:13,color:"#94a3b8",marginBottom:12}}>🔄 대응 이력 (시간순)</div>
+              <div style={{fontSize:13,color:"#94a3b8",marginBottom:12}}>💳 환불 주문 내역</div>
               <div style={{overflowX:"auto"}}>
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                   <thead><tr style={{borderBottom:"1px solid #334155"}}>
-                    {["날짜","결제취소 상품","해제요청일","해제일시","재결제상품","재결제금액","처리날짜","처리결과","상태"].map(h=>(
+                    {["환불일","주문번호","상품명","금액","플랫폼"].map(h=>(
                       <th key={h} style={{padding:"7px 10px",textAlign:"left",color:"#64748b",whiteSpace:"nowrap"}}>{h}</th>))}
                   </tr></thead>
                   <tbody>
-                    {res.responses.map((r,i)=>(
+                    {res.refunds.map((r,i)=>(
                       <tr key={i} style={{borderBottom:"1px solid #0f172a",background:i%2===0?"#0f172a":"transparent"}}>
                         <td style={{padding:"7px 10px",color:"#94a3b8",whiteSpace:"nowrap"}}>{r.date}</td>
-                        <td style={{padding:"7px 10px",color:"#e2e8f0",maxWidth:150,overflow:"hidden",textOverflow:"ellipsis"}}>{r.cancelProduct||"-"}</td>
-                        <td style={{padding:"7px 10px",color:"#f59e0b",whiteSpace:"nowrap"}}>{r.requestDate||"-"}</td>
-                        <td style={{padding:"7px 10px",color:"#22d3ee",whiteSpace:"nowrap"}}>{r.releaseDate||"-"}</td>
-                        <td style={{padding:"7px 10px",color:"#e2e8f0"}}>{r.rechargeProduct||"-"}</td>
-                        <td style={{padding:"7px 10px",color:"#22d3ee"}}>{r.rechargeAmount?fmtKRW(r.rechargeAmount):"-"}</td>
-                        <td style={{padding:"7px 10px",color:"#94a3b8",whiteSpace:"nowrap"}}>{r.processDate||"-"}</td>
-                        <td style={{padding:"7px 10px",color:"#94a3b8",maxWidth:150,overflow:"hidden",textOverflow:"ellipsis"}}>{r.processResult||"-"}</td>
-                        <td style={{padding:"7px 10px"}}><span style={{padding:"2px 7px",borderRadius:4,fontSize:11,
-                          background:r.resanctioned?"#450a0a":r.status==="복구완료"?"#14532d":"#164e63",
-                          color:r.resanctioned?"#ef4444":r.status==="복구완료"?"#22c55e":"#22d3ee"}}>{r.status}</span></td>
+                        <td style={{padding:"7px 10px",color:"#e2e8f0",fontSize:10}}>{r.orderNo||"-"}</td>
+                        <td style={{padding:"7px 10px",color:"#e2e8f0"}}>{r.product||"-"}</td>
+                        <td style={{padding:"7px 10px",color:"#ef4444",whiteSpace:"nowrap"}}>{"₩"+(r.amount||0).toLocaleString()}</td>
+                        <td style={{padding:"7px 10px"}}><span style={{padding:"2px 7px",borderRadius:4,fontSize:10,
+                          background:r.platform==="Google"?"#1e3a5f":"#3b1f5e",
+                          color:r.platform==="Google"?"#4285F4":"#A855F7"}}>{r.platform}</span></td>
                       </tr>))}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          )}
+
+          {/* 대응 타임라인 */}
+          {res.responses.length>0 && (
+            <div style={{background:"#1e293b",borderRadius:12,padding:16}}>
+              <div style={{fontSize:13,color:"#94a3b8",marginBottom:16}}>📋 대응 타임라인</div>
+              <div style={{display:"flex",flexDirection:"column",gap:0}}>
+                {res.responses.map((r,i)=>{
+                  const col = r.resanctioned?"#ef4444":r.status==="복구완료"?"#22c55e":"#22d3ee";
+                  const icon = r.resanctioned?"🚫":r.status==="복구완료"?"✅":"⏳";
+                  return (
+                    <div key={i} style={{display:"flex",gap:14,alignItems:"flex-start"}}>
+                      <div style={{display:"flex",flexDirection:"column",alignItems:"center"}}>
+                        <div style={{width:32,height:32,borderRadius:"50%",background:col+"22",border:`2px solid ${col}`,
+                          display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,flexShrink:0}}>
+                          {icon}
+                        </div>
+                        {i<res.responses.length-1 && <div style={{width:2,height:40,background:"#334155"}}/>}
+                      </div>
+                      <div style={{paddingBottom:i<res.responses.length-1?12:0,flex:1}}>
+                        <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:4}}>
+                          <span style={{fontSize:12,fontWeight:600,color:"#e2e8f0"}}>{r.date}</span>
+                          <span style={{padding:"2px 7px",borderRadius:4,fontSize:10,
+                            background:r.resanctioned?"#450a0a":r.status==="복구완료"?"#14532d":"#164e63",
+                            color:col}}>{r.status}</span>
+                        </div>
+                        <div style={{fontSize:11,color:"#94a3b8",lineHeight:1.6}}>
+                          {r.cancelOrderNo && <div>주문번호: <span style={{color:"#e2e8f0"}}>{r.cancelOrderNo}</span></div>}
+                          {r.cancelProduct && <div>상품: <span style={{color:"#e2e8f0"}}>{r.cancelProduct}</span></div>}
+                          {r.releaseDate && <div>해제일시: <span style={{color:"#22d3ee"}}>{r.releaseDate}</span></div>}
+                          {r.processDate && <div>처리날짜: <span style={{color:"#f59e0b"}}>{r.processDate}</span></div>}
+                          {r.processResult && <div>처리결과: <span style={{color:col,fontWeight:600}}>{r.processResult}</span></div>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
