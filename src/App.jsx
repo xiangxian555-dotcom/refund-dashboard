@@ -194,15 +194,18 @@ function parseResponseCSV(text, country, platform, colMap) {
 
     if (combinedText === "") {
       status = "처리중";
-    } else if (combinedText.includes("회수") || combinedText.includes("해제")) {
-      status = "복구완료";
-    } else if (combinedText.includes("다시 제재") || combinedText.includes("다시제재") || 
-               combinedText.includes("재제재") || combinedText.includes("하지 않아") || 
-               combinedText.includes("정지") || combinedText.includes("제재 진행")) {
+    } else if (combinedText.includes("제재") || combinedText.includes("제제") ||
+               combinedText.includes("정지") || combinedText.includes("밴") ||
+               combinedText.includes("하지 않아") || combinedText.includes("하지않아") ||
+               combinedText.includes("않음") || combinedText.includes("안하") || 
+               combinedText.includes("안 하") || combinedText.includes("부족") ||
+               combinedText.includes("재재정") || combinedText.includes("사용했습니다")) {
+      // 재제재 키워드 (회수/해제보다 우선)
       status = "재제재";
       resanctioned = true;
+    } else if (combinedText.includes("회수") || combinedText.includes("해제") || combinedText.includes("완료")) {
+      status = "복구완료";
     } else if (processDateRaw || resultText) {
-      // N열이나 O열에 뭔가 적혀있으면 처리된 것으로 간주
       status = "복구완료";
     }
 
