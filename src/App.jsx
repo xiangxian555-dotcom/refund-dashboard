@@ -69,104 +69,112 @@ function detectCountry(sheetName) {
 // 엑셀 파일 파싱 — 시트명으로 자동 인식
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function parseExcelFile(wb) {
-  const orderRows = [];   // 주문번호 시트 (결제취소 악용 대상자 OrderID)
-  const abuseRows = [];   // 악용자 리스트 (결제취소 악용자 리스트)
+  // 시트1: 악용 대상자 UC 보유 정보 → 주문건수 + 유니크 OpenID + 날짜
+  // 시트2: 결제취소 악용자 리스트 → OpenID + G열 회수/제재
+  // 시트3: 결제취소 악용 대상자 OrderID → 주문번호 원본 (보조)
+  const orderRows = [];   // 주문 행 (UC보유정보 시트 기준)
+  const abuseRows = [];   // 최종 처리 결과 (악용자 리스트 G열)
   const log = [];
+
+  const getHeaders = (raw) => {
+    let headerIdx = 0;
+    for (let i = 0; i < Math.min(5, raw.length); i++) {
+      const row = raw[i].map(c => String(c||"").toLowerCase());
+      if (row.some(c =>
+        c.includes("openid") || c.includes("오픈") || c.includes("open") ||
+        c.includes("주문번호") || c.includes("order") || c.includes("화폐") ||
+        c.includes("currency")
+      )) { headerIdx = i; break; }
+    }
+    return { headerIdx, headers: raw[headerIdx].map(c => String(c||"").trim()) };
+  };
+
+  const findCol = (headers, ...names) => {
+    for (const n of names) {
+      const idx = headers.findIndex(h => new RegExp(n, "i").test(h));
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  };
 
   wb.SheetNames.forEach(sName => {
     const ws = wb.Sheets[sName];
     const raw = XLSX.utils.sheet_to_json(ws, { defval: "", header: 1 });
     if (!raw || raw.length < 2) return;
 
-    // 헤더 행 찾기 (OPENID 또는 주문번호가 있는 행)
-    let headerIdx = 0;
-    for (let i = 0; i < Math.min(5, raw.length); i++) {
-      const row = raw[i].map(c => String(c||"").toLowerCase());
-      if (row.some(c => c.includes("openid") || c.includes("오픈") || c.includes("주문번호") || c.includes("order"))) {
-        headerIdx = i; break;
-      }
-    }
-    const headers = raw[headerIdx].map(c => String(c||"").trim());
-    const findCol = (...names) => {
-      for (const n of names) {
-        const idx = headers.findIndex(h => new RegExp(n, "i").test(h));
-        if (idx >= 0) return idx;
-      }
-      return -1;
-    };
-
     const sLower = sName.toLowerCase();
+    const { headerIdx, headers } = getHeaders(raw);
+    const fc = (...n) => findCol(headers, ...n);
 
-    // ── 주문번호 시트 (결제취소 악용 대상자 OrderID) ──
-    if (sLower.includes("orderid") || sLower.includes("주문번호") || sLower.includes("order")) {
+    // ━━━ 시트1: 악용 대상자 UC 보유 정보 ━━━
+    // → 주문건수 + 유니크 OpenID + 날짜 + 화폐(국가)
+    if (sLower.includes("uc 보유") || sLower.includes("uc보유") || sLower.includes("보유 정보") || sLower.includes("보유정보")) {
       const ci = {
-        orderNo: findCol("주문번호","order number","order"),
-        openid: findCol("오픈 아이디","openid","오픈아이디","open id"),
-        currency: findCol("화폐","currency","통화"),
-        ucBalance: findCol("uc잔액","uc 잔액","잔액"),
-        time: findCol("시간","time","날짜","date"),
+        openid: fc("오픈 아이디","오픈아이디","openid","open id","open_id","오픈 id","오픈id"),
+        orderNo: fc("주문번호","order number","order no","orderid"),
+        currency: fc("화폐","currency","통화"),
+        ucBalance: fc("uc잔액","uc 잔액","잔액","현재 보유","현재보유"),
+        time: fc("시간","time","날짜","date","기간"),
       };
       let parsed = 0;
       for (let i = headerIdx + 1; i < raw.length; i++) {
         const row = raw[i];
-        const orderNo = String(row[ci.orderNo] || "").trim();
-        const openid = String(row[ci.openid] || "").trim();
-        if (!orderNo && !openid) continue;
-        const currency = String(row[ci.currency] || "KRW").trim().toUpperCase();
+        const openid = String(row[ci.openid] ?? "").trim();
+        const orderNo = String(row[ci.orderNo] ?? "").trim();
+        if (!openid && !orderNo) continue;
+        const currency = String(row[ci.currency] ?? "KRW").trim().toUpperCase() || "KRW";
         const country = getCountry(currency);
-        // 플랫폼은 주문번호로 판단 (GPA = Google, 없으면 시트명)
-        const platform = orderNo.startsWith("GPA") ? "Google" :
+        const platform = orderNo.toUpperCase().startsWith("GPA") ? "Google" :
+                         orderNo.toUpperCase().startsWith("GI.") ? "iOS" :
                          (detectPlatform(sName) || "Google");
-        const dateRaw = row[ci.time];
-        const date = parseDate(String(dateRaw||"")) || String(dateRaw||"").slice(0,10);
+        const dateRaw = ci.time >= 0 ? row[ci.time] : "";
+        const date = parseDate(String(dateRaw||"")) || "";
         orderRows.push({
           orderNo, openid, currency, country, platform,
           date, year: date.slice(0,4), month: date.slice(0,7),
-          ucBalance: parseNum(row[ci.ucBalance]),
+          ucBalance: parseNum(ci.ucBalance >= 0 ? row[ci.ucBalance] : 0),
           segment: getSeg(platform, country),
         });
         parsed++;
       }
-      log.push({ sheet: sName, type: "주문", count: parsed });
+      log.push({ sheet: sName, type: "UC보유정보", count: parsed });
     }
 
-    // ── 악용자 리스트 시트 ──
-    else if (sLower.includes("악용자") || sLower.includes("리스트") || sLower.includes("list")) {
+    // ━━━ 시트2: 결제취소 악용자 리스트 ━━━
+    // → OpenID + G열(회수/제재) 최종 처리결과
+    else if (sLower.includes("악용자 리스트") || sLower.includes("악용자리스트") ||
+             (sLower.includes("악용자") && sLower.includes("리스트"))) {
+      // A:화폐 B:OPENID C:악용횟수 D:누적획득UC E:현재보유UC F:P값 G:처리결과
       const ci = {
-        currency: findCol("화폐","currency"),
-        openid: findCol("openid","오픈","open id"),
-        abuseCount: findCol("악용 횟수","악용횟수","횟수"),
-        totalUC: findCol("누적 획득","누적획득","獲得"),
-        currentUC: findCol("현재 보유","현재보유","保有"),
-        pValue: findCol("p값","p 값","누적.*현재"),
-        result: findCol("회수","제재","결과","처리"),
-        note: findCol("비고","note","구글독스"),
+        currency: fc("화폐","currency") >= 0 ? fc("화폐","currency") : 0,
+        openid: fc("openid","오픈","open id","open_id") >= 0 ? fc("openid","오픈","open id","open_id") : 1,
+        abuseCount: fc("악용 횟수","악용횟수","횟수"),
+        totalUC: fc("누적 획득","누적획득","누적"),
+        currentUC: fc("현재 보유","현재보유","현재"),
+        pValue: fc("p값","p 값"),
+        // G열 = 처리결과 (헤더 없어도 인덱스 6)
+        result: fc("회수","제재","처리결과","결과","처리") >= 0 ? fc("회수","제재","처리결과","결과","처리") : 6,
       };
-
-      // 마지막 텍스트 컬럼 자동 탐지 (result fallback)
-      if (ci.result < 0) {
-        for (let c = headers.length - 1; c >= 0; c--) {
-          if (headers[c] && headers[c].trim()) { ci.result = c; break; }
-        }
-      }
 
       let parsed = 0;
       for (let i = headerIdx + 1; i < raw.length; i++) {
         const row = raw[i];
-        const openid = String(row[ci.openid] || "").trim();
+        const openid = String(row[ci.openid] ?? "").trim();
         if (!openid) continue;
 
-        const currency = String(row[ci.currency] || "KRW").trim().toUpperCase();
+        const currency = String(row[ci.currency] ?? "KRW").trim().toUpperCase() || "KRW";
         const country = getCountry(currency);
         const platform = detectPlatform(sName) || "Google";
-        const resultText = String(row[ci.result] || "").trim();
-        const pValue = parseNum(row[ci.pValue]);
+        // G열 처리결과
+        const resultText = String(row[ci.result] ?? "").trim();
 
-        let action = "미정";
+        let action = "처리중";
         if (/회수/.test(resultText)) action = "회수";
         else if (/제재|정지|ban/i.test(resultText)) action = "제재";
-        else if (resultText && resultText !== "-") action = pValue >= 0 ? "회수" : "제재";
-        else action = pValue >= 0 ? "회수" : "제재";
+        else if (resultText && resultText !== "-" && resultText.length > 0) {
+          const pVal = parseNum(ci.pValue >= 0 ? row[ci.pValue] : 0);
+          action = pVal >= 0 ? "회수" : "제재";
+        }
 
         abuseRows.push({
           openid, currency, country, platform,
@@ -182,8 +190,7 @@ function parseExcelFile(wb) {
     }
   });
 
-  // orderRows에서 openid→country/platform 매핑 보완
-  // (주문번호 시트의 화폐로 국가 확정)
+  // OpenID → country/platform 매핑
   const oidInfo = {};
   orderRows.forEach(o => {
     if (o.openid && !oidInfo[o.openid]) {
@@ -191,7 +198,16 @@ function parseExcelFile(wb) {
     }
   });
 
-  return { orderRows, abuseRows, oidInfo, log };
+  // ★ 악용자 리스트 OpenID → 처리결과 맵 (빠른 조회용)
+  const abuseMap = {}; // openid → { action, resultText, ... }
+  abuseRows.forEach(a => {
+    if (a.openid) abuseMap[a.openid] = a;
+  });
+
+  // ★ 유니크 OpenID 목록 (UC보유정보 기준, 중복 제거)
+  const uniqueOidSet = new Set(orderRows.map(o => o.openid).filter(Boolean));
+
+  return { orderRows, abuseRows, abuseMap, oidInfo, uniqueOidSet, log };
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -382,6 +398,20 @@ export default function App() {
     return map;
   }, [files]);
 
+  // ★ 엑셀 파일의 악용자 리스트 G열 처리결과 맵 (openid → action)
+  const allAbuseMap = useMemo(() => {
+    const map = {};
+    files.forEach(f => Object.assign(map, f.abuseMap || {}));
+    return map;
+  }, [files]);
+
+  // ★ 엑셀 전체 유니크 OpenID (UC보유정보 기준)
+  const allUniqueOids = useMemo(() => {
+    const set = new Set();
+    files.forEach(f => (f.uniqueOidSet || new Set()).forEach(oid => set.add(oid)));
+    return set;
+  }, [files]);
+
   // ── 필터 ──
   const years = useMemo(() => {
     const ys = [...new Set(allOrderRows.map(d=>d.year))].filter(Boolean).sort();
@@ -415,25 +445,36 @@ export default function App() {
   }, [responseData]);
 
   // ── 핵심 통계 ──
-  // 엑셀 유니크 OpenID → Google Sheets 최신 상태 조인
   const stats = useMemo(() => {
+    // 총 주문건수 (UC보유정보 시트 전체 행수)
     const totalOrders = filtered.length;
 
-    // 엑셀에서 유니크 OpenID 추출 (연도/세그먼트 필터 적용)
+    // ★ 유니크 OpenID (연도/세그먼트 필터 적용된 행에서 중복 제거)
     const uniqueOids = [...new Set(filtered.map(d=>d.openid).filter(Boolean))];
     const uniqueUsers = uniqueOids.length;
 
-    // 악용자 리스트 기준 (엑셀 파일)
-    const totalAbuse = allAbuseRows.length;
-    const recovered = allAbuseRows.filter(a=>a.action==="회수").length;
-    const sanctioned = allAbuseRows.filter(a=>a.action==="제재").length;
+    // ★ 악용자 리스트 G열 기준: 회수/제재
+    // 필터된 유니크 OpenID → 악용자 리스트에서 처리결과 조회
+    let excelRecovered = 0, excelSanctioned = 0, excelProcessing = 0;
+    if (uniqueOids.length > 0 && Object.keys(allAbuseMap).length > 0) {
+      uniqueOids.forEach(oid => {
+        const abuse = allAbuseMap[oid];
+        if (!abuse) { excelProcessing++; return; }
+        if (abuse.action === "회수") excelRecovered++;
+        else if (abuse.action === "제재") excelSanctioned++;
+        else excelProcessing++;
+      });
+    } else {
+      // 악용자 리스트 전체 기준
+      excelRecovered = allAbuseRows.filter(a=>a.action==="회수").length;
+      excelSanctioned = allAbuseRows.filter(a=>a.action==="제재").length;
+      excelProcessing = allAbuseRows.filter(a=>a.action==="처리중").length;
+    }
 
-    // ★ 핵심: 엑셀 유니크 OpenID → Google Sheets 상태 매칭
-    // 엑셀 파일이 있으면 엑셀 OpenID 기준, 없으면 Sheets 전체 기준
+    // ★ Google Sheets 기준: 복구완료/재제재/처리중
     let respRecovered = 0, respResanctioned = 0, respProcessing = 0, totalResp = 0;
-
-    if (uniqueOids.length > 0) {
-      // 엑셀 OpenID 기준으로 Sheets 상태 조회
+    if (uniqueOids.length > 0 && Object.keys(sheetOidMap).length > 0) {
+      // 엑셀 유니크 OpenID → Google Sheets 최신 상태 매칭
       uniqueOids.forEach(oid => {
         const sheetData = sheetOidMap[oid];
         if (sheetData) {
@@ -443,30 +484,37 @@ export default function App() {
           else respProcessing++;
         }
       });
-    } else {
+    } else if (uniqueOids.length === 0) {
       // 엑셀 없으면 Sheets 전체 기준
-      const filteredSheetOids = Object.entries(sheetOidMap).filter(([,v]) => {
-        if (yearFilter !== "전체") return true; // 연도 필터는 엑셀 기준이므로 Sheets만 있을 땐 전체
+      const allSheetOids = Object.entries(sheetOidMap).filter(([,v]) => {
         if (segFilter !== "전체") return getSeg(v.platform, v.country) === segFilter;
         return true;
       });
-      totalResp = filteredSheetOids.length;
-      respRecovered = filteredSheetOids.filter(([,v])=>v.status==="복구완료").length;
-      respResanctioned = filteredSheetOids.filter(([,v])=>v.status==="재제재").length;
-      respProcessing = filteredSheetOids.filter(([,v])=>v.status==="처리중").length;
+      totalResp = allSheetOids.length;
+      respRecovered = allSheetOids.filter(([,v])=>v.status==="복구완료").length;
+      respResanctioned = allSheetOids.filter(([,v])=>v.status==="재제재").length;
+      respProcessing = allSheetOids.filter(([,v])=>v.status==="처리중").length;
     }
 
     // 세그먼트별
     const segStats = {};
     filtered.forEach(d => { segStats[d.segment]=(segStats[d.segment]||0)+1; });
-
-    // 엑셀 없을 때는 Sheets 세그먼트별도 집계
     if (filtered.length === 0 && responseData.length > 0) {
       responseData.forEach(d => { segStats[d.segment]=(segStats[d.segment]||0)+1; });
     }
 
-    return { totalOrders, uniqueUsers, totalAbuse, recovered, sanctioned, respRecovered, respResanctioned, respProcessing, totalResp, segStats };
-  }, [filtered, allAbuseRows, sheetOidMap, responseData, yearFilter, segFilter]);
+    return {
+      totalOrders, uniqueUsers,
+      // 악용자 리스트 G열 기준
+      totalAbuse: allAbuseRows.length,
+      recovered: excelRecovered,
+      sanctioned: excelSanctioned,
+      excelProcessing,
+      // Google Sheets 기준
+      respRecovered, respResanctioned, respProcessing, totalResp,
+      segStats
+    };
+  }, [filtered, allAbuseRows, allAbuseMap, sheetOidMap, responseData, segFilter]);
 
   // ── 연도별 차트 ──
   const yearlyChart = useMemo(() => {
