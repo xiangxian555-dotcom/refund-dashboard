@@ -140,10 +140,11 @@ function parseResponseCSV(text, country, platform, colMap) {
   const get = (row, idx) => (idx >= 0 && idx < row.length) ? row[idx] : "";
   const results = [];
   let lastDate = null;
+  let lastOpenid = null;
 
   for (let i = 1; i < allRows.length; i++) {
     const row = allRows[i];
-    if (!row || row.length < 3) continue;
+    if (!row || row.length < 2) continue;
     if (row.every(c => !c || c.trim() === "")) continue;
 
     const dateRaw = get(row, ci.date);
@@ -151,15 +152,25 @@ function parseResponseCSV(text, country, platform, colMap) {
     const processDateRaw = get(row, ci.processDate).trim();
     const resultText = get(row, ci.processResult).trim();
 
-    // [버그1 수정] 날짜 파싱을 openid 체크보다 먼저
+    // 날짜 파싱 — openid 체크보다 먼저 해서 lastDate 항상 갱신
     let dateParsed = parseDate(dateRaw);
     if (dateParsed) { lastDate = dateParsed; }
     else { dateParsed = lastDate; }
 
-    // openid 없으면 스킵 (날짜 갱신 후)
-    if (!openid || openid.trim() === "") continue;
+    // openid 처리 — 없으면 이전 행의 openid 이어받기 (같은 유저의 연속 행)
+    let effectiveOpenid = openid ? openid.trim() : "";
+    if (!effectiveOpenid) {
+      // openid가 없는 행은 이전 openid 상속 (단, processDate나 resultText가 있는 경우만)
+      if (lastOpenid && (processDateRaw || resultText)) {
+        effectiveOpenid = lastOpenid;
+      } else {
+        continue;
+      }
+    } else {
+      lastOpenid = effectiveOpenid;
+    }
 
-    // [버그2 수정] 날짜 없으면 processDate에서 fallback
+    // 날짜 없으면 processDate에서 fallback
     if (!dateParsed) {
       const fallbackDate = parseDate(processDateRaw);
       if (fallbackDate) { dateParsed = fallbackDate; lastDate = fallbackDate; }
@@ -197,7 +208,7 @@ function parseResponseCSV(text, country, platform, colMap) {
     }
 
     results.push({
-      openid: openid.trim(), country, platform,
+      openid: effectiveOpenid, country, platform,
       date: dateParsed, year, month, day, week: Math.ceil(day / 7),
       cancelOrderNo: get(row, ci.cancelOrderNo),
       cancelProduct: get(row, ci.cancelProduct),
