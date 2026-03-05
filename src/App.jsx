@@ -400,35 +400,73 @@ export default function App() {
     return true;
   }), [responseData, yearFilter, segFilter]);
 
+  // ── Google Sheets OpenID → 최신 상태 맵 (전체) ──
+  const sheetOidMap = useMemo(() => {
+    const map = {};
+    [...responseData].sort((a,b)=>a.date.localeCompare(b.date)).forEach(d => {
+      if (!d.openid) return;
+      if (!map[d.openid]) map[d.openid] = { status: d.status, lastDate: d.date, country: d.country, platform: d.platform };
+      if (d.date >= map[d.openid].lastDate) {
+        map[d.openid].status = d.status;
+        map[d.openid].lastDate = d.date;
+      }
+    });
+    return map;
+  }, [responseData]);
+
   // ── 핵심 통계 ──
+  // 엑셀 유니크 OpenID → Google Sheets 최신 상태 조인
   const stats = useMemo(() => {
     const totalOrders = filtered.length;
-    const uniqueUsers = new Set(filtered.map(d=>d.openid).filter(Boolean)).size;
-    const totalAmount = filtered.reduce((s,d)=>s+d.ucBalance,0);
 
-    // 악용자 리스트 기준
+    // 엑셀에서 유니크 OpenID 추출 (연도/세그먼트 필터 적용)
+    const uniqueOids = [...new Set(filtered.map(d=>d.openid).filter(Boolean))];
+    const uniqueUsers = uniqueOids.length;
+
+    // 악용자 리스트 기준 (엑셀 파일)
     const totalAbuse = allAbuseRows.length;
     const recovered = allAbuseRows.filter(a=>a.action==="회수").length;
     const sanctioned = allAbuseRows.filter(a=>a.action==="제재").length;
 
-    // 대응현황 (Google Sheets) 기준
-    const oidMap = {};
-    [...filteredResp].sort((a,b)=>a.date.localeCompare(b.date)).forEach(d=>{
-      if(!oidMap[d.openid]) oidMap[d.openid]={status:d.status,lastDate:d.date};
-      if(d.date>=oidMap[d.openid].lastDate){oidMap[d.openid].status=d.status;oidMap[d.openid].lastDate=d.date;}
-    });
-    const ids = Object.values(oidMap);
-    const respRecovered = ids.filter(d=>d.status==="복구완료").length;
-    const respResanctioned = ids.filter(d=>d.status==="재제재").length;
-    const respProcessing = ids.filter(d=>d.status==="처리중").length;
-    const totalResp = ids.length;
+    // ★ 핵심: 엑셀 유니크 OpenID → Google Sheets 상태 매칭
+    // 엑셀 파일이 있으면 엑셀 OpenID 기준, 없으면 Sheets 전체 기준
+    let respRecovered = 0, respResanctioned = 0, respProcessing = 0, totalResp = 0;
+
+    if (uniqueOids.length > 0) {
+      // 엑셀 OpenID 기준으로 Sheets 상태 조회
+      uniqueOids.forEach(oid => {
+        const sheetData = sheetOidMap[oid];
+        if (sheetData) {
+          totalResp++;
+          if (sheetData.status === "복구완료") respRecovered++;
+          else if (sheetData.status === "재제재") respResanctioned++;
+          else respProcessing++;
+        }
+      });
+    } else {
+      // 엑셀 없으면 Sheets 전체 기준
+      const filteredSheetOids = Object.entries(sheetOidMap).filter(([,v]) => {
+        if (yearFilter !== "전체") return true; // 연도 필터는 엑셀 기준이므로 Sheets만 있을 땐 전체
+        if (segFilter !== "전체") return getSeg(v.platform, v.country) === segFilter;
+        return true;
+      });
+      totalResp = filteredSheetOids.length;
+      respRecovered = filteredSheetOids.filter(([,v])=>v.status==="복구완료").length;
+      respResanctioned = filteredSheetOids.filter(([,v])=>v.status==="재제재").length;
+      respProcessing = filteredSheetOids.filter(([,v])=>v.status==="처리중").length;
+    }
 
     // 세그먼트별
     const segStats = {};
     filtered.forEach(d => { segStats[d.segment]=(segStats[d.segment]||0)+1; });
 
-    return { totalOrders, uniqueUsers, totalAmount, totalAbuse, recovered, sanctioned, respRecovered, respResanctioned, respProcessing, totalResp, segStats };
-  }, [filtered, allAbuseRows, filteredResp]);
+    // 엑셀 없을 때는 Sheets 세그먼트별도 집계
+    if (filtered.length === 0 && responseData.length > 0) {
+      responseData.forEach(d => { segStats[d.segment]=(segStats[d.segment]||0)+1; });
+    }
+
+    return { totalOrders, uniqueUsers, totalAbuse, recovered, sanctioned, respRecovered, respResanctioned, respProcessing, totalResp, segStats };
+  }, [filtered, allAbuseRows, sheetOidMap, responseData, yearFilter, segFilter]);
 
   // ── 연도별 차트 ──
   const yearlyChart = useMemo(() => {
@@ -518,13 +556,22 @@ ${JSON.stringify(ctx,null,2)}
   useEffect(()=>{ chatEndRef.current?.scrollIntoView({behavior:"smooth"}); },[chatMessages]);
 
   // ── 유저 조회 ──
+  // ── 유저 조회 ──
   const doSearch = () => {
     const q = searchQ.trim();
     if (!q) return;
-    const orders = allOrderRows.filter(d=>d.openid.includes(q)||d.orderNo.includes(q));
-    const abuse = allAbuseRows.find(a=>a.openid.includes(q));
-    const history = responseData.filter(d=>d.openid.includes(q)).sort((a,b)=>a.date.localeCompare(b.date));
-    setSearchRes({q, orders, abuse, history});
+    let searchOids = new Set();
+    allOrderRows.forEach(d => { if (d.openid && (d.openid.includes(q) || (d.orderNo && d.orderNo.includes(q)))) searchOids.add(d.openid); });
+    responseData.forEach(d => { if (d.openid && d.openid.includes(q)) searchOids.add(d.openid); });
+    if (searchOids.size === 0) searchOids.add(q);
+    const oids = [...searchOids];
+    const orders = allOrderRows.filter(d => oids.some(oid => d.openid === oid)).sort((a,b)=>a.date.localeCompare(b.date));
+    const abuse = allAbuseRows.find(a => oids.some(oid => a.openid === oid));
+    const history = responseData.filter(d => oids.some(oid => d.openid === oid)).sort((a,b)=>a.date.localeCompare(b.date));
+    const latestStatus = sheetOidMap[oids[0]] || null;
+    const yearSummary = {};
+    orders.forEach(o => { if (!yearSummary[o.year]) yearSummary[o.year] = { count:0, platform:o.platform, country:o.country }; yearSummary[o.year].count++; });
+    setSearchRes({ q, orders, abuse, history, latestStatus, yearSummary, oids });
   };
 
   const hasData = allOrderRows.length > 0;
@@ -893,14 +940,15 @@ ${JSON.stringify(ctx,null,2)}
               {/* 요약 */}
               <div style={{background:"#0d1b2e",borderRadius:14,padding:16,border:"1px solid #1e3a5f"}}>
                 <div style={{fontSize:14,fontWeight:800,color:"#e8f4ff",marginBottom:12}}>👤 {searchRes.q}</div>
-                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
                   {[
                     ["환불 주문",searchRes.orders.length+"건","#3b82f6"],
                     ["악용 횟수",searchRes.abuse?searchRes.abuse.abuseCount+"회":"없음","#f59e0b"],
-                    ["처리 방식",searchRes.abuse?searchRes.abuse.action:"없음",searchRes.abuse?.action==="회수"?"#22d3ee":"#ef4444"],
                     ["대응 이력",searchRes.history.length+"건","#8b5cf6"],
-                    ["최종 상태",searchRes.history.length?searchRes.history[searchRes.history.length-1].status:"없음",
-                      searchRes.history.length?STATUS_COLORS[searchRes.history[searchRes.history.length-1].status]:"#4a6fa5"],
+                    ["최종 상태",
+                      searchRes.latestStatus?.status || (searchRes.history.length ? searchRes.history[searchRes.history.length-1].status : "없음"),
+                      STATUS_COLORS[searchRes.latestStatus?.status || searchRes.history[searchRes.history.length-1]?.status] || "#4a6fa5"
+                    ],
                   ].map(([l,v,c])=>(
                     <div key={l} style={{background:"#060d18",borderRadius:10,padding:"8px 14px"}}>
                       <div style={{fontSize:10,color:"#2d4a6e"}}>{l}</div>
@@ -908,8 +956,43 @@ ${JSON.stringify(ctx,null,2)}
                     </div>
                   ))}
                 </div>
+                {/* 연도별 환불 요약 */}
+                {Object.keys(searchRes.yearSummary||{}).length > 0 && (
+                  <div style={{background:"#060d18",borderRadius:8,padding:10,marginBottom:10}}>
+                    <div style={{fontSize:11,color:"#2d4a6e",marginBottom:6}}>📅 연도별 환불 이력</div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                      {Object.entries(searchRes.yearSummary).sort().map(([year,info])=>{
+                        const isLatest = year === Object.keys(searchRes.yearSummary).sort().pop();
+                        return (
+                          <div key={year} style={{padding:"4px 10px",borderRadius:6,background:"#0d1b2e",border:`1px solid ${isLatest?"#3b82f6":"#1e3a5f"}`}}>
+                            <span style={{fontSize:11,color:isLatest?"#3b82f6":"#4a6fa5",fontWeight:700}}>{year}년</span>
+                            <span style={{fontSize:10,color:"#4a6fa5",marginLeft:4}}>{info.count}건</span>
+                            <span style={{fontSize:10,color:"#2d4a6e",marginLeft:4}}>{info.platform}·{info.country}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+                {/* Google Sheets 최신 상태 */}
+                {searchRes.latestStatus ? (
+                  <div style={{background:"#060d18",borderRadius:8,padding:10,marginBottom:10,borderLeft:`3px solid ${STATUS_COLORS[searchRes.latestStatus.status]||"#4a6fa5"}`}}>
+                    <div style={{fontSize:11,color:"#2d4a6e",marginBottom:4}}>🔗 Google Sheets 최신 처리 결과</div>
+                    <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                      <span style={{padding:"3px 10px",borderRadius:6,background:(STATUS_COLORS[searchRes.latestStatus.status]||"#4a6fa5")+"22",color:STATUS_COLORS[searchRes.latestStatus.status]||"#4a6fa5",fontWeight:700,fontSize:13}}>
+                        {searchRes.latestStatus.status}
+                      </span>
+                      <span style={{fontSize:11,color:"#4a6fa5"}}>{searchRes.latestStatus.platform} · {searchRes.latestStatus.country}</span>
+                      <span style={{fontSize:11,color:"#2d4a6e"}}>{searchRes.latestStatus.lastDate}</span>
+                    </div>
+                  </div>
+                ) : searchRes.history.length === 0 && (
+                  <div style={{background:"#060d18",borderRadius:8,padding:10,borderLeft:"3px solid #f59e0b",marginBottom:10}}>
+                    <span style={{fontSize:11,color:"#f59e0b"}}>⚠️ Google Sheets에서 해당 유저를 찾을 수 없어요. 대응현황을 먼저 불러와주세요.</span>
+                  </div>
+                )}
                 {searchRes.abuse && (
-                  <div style={{marginTop:12,background:"#060d18",borderRadius:8,padding:10,fontSize:11,color:"#4a6fa5"}}>
+                  <div style={{background:"#060d18",borderRadius:8,padding:10,fontSize:11,color:"#4a6fa5"}}>
                     누적 획득 UC: <span style={{color:"#3b82f6"}}>{fmt(searchRes.abuse.totalUC)}</span> · 현재 보유 UC: <span style={{color:"#22c55e"}}>{fmt(searchRes.abuse.currentUC)}</span> · P값: <span style={{color:searchRes.abuse.pValue>=0?"#22d3ee":"#ef4444"}}>{fmt(searchRes.abuse.pValue)}</span>
                   </div>
                 )}
