@@ -441,11 +441,13 @@ const Card = ({ icon, label, value, sub, color="#3b82f6" }) => (
 // 메인 앱
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 export default function App() {
+  const [marketTab, setMarketTab] = useState("Google"); // Google / iOS
+  const [countryTab, setCountryTab] = useState("전체");   // 전체 / 한국 / 일본
   const [tab, setTab] = useState("마켓 환불 현황");
   const [yearFilter, setYearFilter] = useState("전체");
   const [monthFilter, setMonthFilter] = useState("전체");
   const [segFilter, setSegFilter] = useState("전체");
-  const [csStatusTab, setCsStatusTab] = useState("전체");
+  const [csStatusTab, setCsStatusTab] = useState("");
 
   // 엑셀 데이터 (파일 2개: Google/iOS 각각)
   const [files, setFiles] = useState([]); // [{name, orderRows, abuseRows, oidInfo, log}]
@@ -528,27 +530,43 @@ export default function App() {
   }, []);
 
   // ── 전체 데이터 통합 ──
-  const allOrderRows = useMemo(() => files.flatMap(f => f.orderRows), [files]);
-  const allAbuseRows = useMemo(() => files.flatMap(f => f.abuseRows), [files]);
+  // 전체 raw 데이터
+  const rawOrderRows = useMemo(() => files.flatMap(f => f.orderRows), [files]);
+  const rawAbuseRows = useMemo(() => files.flatMap(f => f.abuseRows), [files]);
+
+  // marketTab + countryTab 필터 적용된 데이터
+  const allOrderRows = useMemo(() => rawOrderRows.filter(d => {
+    if (marketTab !== "전체" && d.platform !== marketTab) return false;
+    if (countryTab !== "전체" && d.country !== countryTab) return false;
+    return true;
+  }), [rawOrderRows, marketTab, countryTab]);
+
+  const allAbuseRows = useMemo(() => rawAbuseRows.filter(d => {
+    if (marketTab !== "전체" && d.platform !== marketTab) return false;
+    if (countryTab !== "전체" && d.country !== countryTab) return false;
+    return true;
+  }), [rawAbuseRows, marketTab, countryTab]);
   const allOidInfo = useMemo(() => {
     const map = {};
     files.forEach(f => Object.assign(map, f.oidInfo));
     return map;
-  }, [files]);
+  }, [files]); // oidInfo는 전체 유지 (유저 조회용)
 
-  // ★ 엑셀 파일의 악용자 리스트 G열 처리결과 맵 (openid → action)
+  // ★ 엑셀 파일의 악용자 리스트 G열 처리결과 맵 (openid → action) - marketTab 필터 적용
   const allAbuseMap = useMemo(() => {
     const map = {};
-    files.forEach(f => Object.assign(map, f.abuseMap || {}));
+    rawAbuseRows.filter(a => {
+      if (marketTab !== "전체" && a.platform !== marketTab) return false;
+      if (countryTab !== "전체" && a.country !== countryTab) return false;
+      return true;
+    }).forEach(a => { if (a.openid) map[a.openid] = a; });
     return map;
-  }, [files]);
+  }, [rawAbuseRows, marketTab, countryTab]);
 
-  // ★ 엑셀 전체 유니크 OpenID (UC보유정보 기준)
+  // ★ 엑셀 전체 유니크 OpenID (UC보유정보 기준, 현재 marketTab/countryTab 필터 적용)
   const allUniqueOids = useMemo(() => {
-    const set = new Set();
-    files.forEach(f => (f.uniqueOidSet || new Set()).forEach(oid => set.add(oid)));
-    return set;
-  }, [files]);
+    return new Set(allOrderRows.filter(d=>d.type==="UC보유정보").map(d=>d.openid).filter(Boolean));
+  }, [allOrderRows]);
 
   // ── 필터 ──
   const years = useMemo(() => {
@@ -569,12 +587,12 @@ export default function App() {
     return true;
   }), [allOrderRows, yearFilter, monthFilter, segFilter]);
 
-  const filteredResp = useMemo(() => responseData.filter(d => {
+  const filteredResp = useMemo(() => filteredResponseData.filter(d => {
     if (yearFilter!=="전체" && d.year!==yearFilter) return false;
     if (monthFilter!=="전체" && d.month!==monthFilter) return false;
     if (segFilter!=="전체" && d.segment!==segFilter) return false;
     return true;
-  }), [responseData, yearFilter, monthFilter, segFilter]);
+  }), [filteredResponseData, yearFilter, monthFilter, segFilter]);
 
   // 환율 변환 함수
   const toKRW = useCallback((amount, currency) => {
@@ -582,30 +600,26 @@ export default function App() {
     return Math.abs(amount) * rate;
   }, [exchangeRates]);
 
-  // ── Google Sheets OpenID → 최신 상태 맵 (국가별 분리 매칭) ──
+  // ── Google Sheets: marketTab/countryTab 기준 필터된 responseData ──
+  const filteredResponseData = useMemo(() => responseData.filter(d => {
+    // Google탭 → platform=Google 시트만, iOS탭 → platform=iOS 시트만
+    if (marketTab !== "전체" && d.platform !== marketTab) return false;
+    if (countryTab !== "전체" && d.country !== countryTab) return false;
+    return true;
+  }), [responseData, marketTab, countryTab]);
+
+  // OpenID → 최신 상태 맵
   const sheetOidMap = useMemo(() => {
     const map = {};
-    [...responseData].sort((a,b)=>a.date.localeCompare(b.date)).forEach(d => {
+    [...filteredResponseData].sort((a,b)=>a.date.localeCompare(b.date)).forEach(d => {
       if (!d.openid) return;
-      const key = d.openid;
-      if (!map[key]) map[key] = { status: d.status, lastDate: d.date, country: d.country, platform: d.platform };
-      if (d.date >= map[key].lastDate) {
-        map[key].status = d.status;
-        map[key].lastDate = d.date;
-        map[key].country = d.country;
-        map[key].platform = d.platform;
+      if (!map[d.openid]) map[d.openid] = { status: d.status, lastDate: d.date, country: d.country, platform: d.platform };
+      if (d.date >= map[d.openid].lastDate) {
+        map[d.openid] = { status: d.status, lastDate: d.date, country: d.country, platform: d.platform };
       }
     });
     return map;
-  }, [responseData]);
-
-  // 국가별 매칭: 한국 OpenID → 한국 시트만, 일본 → 일본 시트만
-  const getSheetStatus = useCallback((openid, country) => {
-    const allMatches = responseData.filter(d => d.openid === openid && d.country === country);
-    if (allMatches.length === 0) return null;
-    const latest = allMatches.sort((a,b)=>b.date.localeCompare(a.date))[0];
-    return latest;
-  }, [responseData]);
+  }, [filteredResponseData]);
 
   // ── 핵심 통계 ──
   const stats = useMemo(() => {
@@ -807,7 +821,7 @@ ${JSON.stringify(ctx,null,2)}
   };
 
   const hasData = allOrderRows.length > 0;
-  const hasResp = responseData.length > 0;
+  const hasResp = filteredResponseData.length > 0;
 
   const FilterBar = () => (
     <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
@@ -888,19 +902,48 @@ ${JSON.stringify(ctx,null,2)}
         </div>
         <div style={{display:"flex",gap:6,fontSize:11,flexWrap:"wrap"}}>
           <span style={{padding:"3px 10px",borderRadius:20,background:hasData?"#14532d":"#0d1b2e",color:hasData?"#22c55e":"#2d4a6e",border:"1px solid #1e3a5f"}}>
-            📁 {hasData?`${fmt(allOrderRows.length)}건 로드됨`:"파일 미업로드"}
+            📁 {hasData?`${fmt(rawOrderRows.length)}건 로드됨`:"파일 미업로드"}
           </span>
           <span style={{padding:"3px 10px",borderRadius:20,background:hasResp?"#14532d":"#0d1b2e",color:hasResp?"#22c55e":"#2d4a6e",border:"1px solid #1e3a5f"}}>
-            📊 {hasResp?`대응현황 ${fmt(responseData.length)}건`:"대응현황 미로드"}
+            📊 {hasResp?`대응현황 ${fmt(filteredResponseData.length)}건 (전체 ${fmt(responseData.length)}건)`:"대응현황 미로드"}
           </span>
         </div>
+      </div>
+
+      {/* ━━━ 레벨1: Google / iOS 큰 탭 ━━━ */}
+      <div style={{display:"flex",gap:0,marginBottom:0,borderBottom:"2px solid #1e3a5f",marginTop:4}}>
+        {[["Google","🤖 Google Play","#3b82f6"],["iOS","🍎 iOS","#a855f7"]].map(([key,label,color])=>(
+          <button key={key} onClick={()=>{ setMarketTab(key); setCountryTab("전체"); setCsStatusTab(""); }}
+            style={{padding:"13px 32px",background:marketTab===key?color+"11":"transparent",
+              color:marketTab===key?color:"#2d4a6e",fontWeight:800,fontSize:14,border:"none",
+              borderBottom:`3px solid ${marketTab===key?color:"transparent"}`,marginBottom:-2,
+              cursor:"pointer",transition:"all 0.2s"}}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* ━━━ 레벨2: 전체 / 한국 / 일본 탭 ━━━ */}
+      <div style={{display:"flex",gap:6,padding:"10px 0",marginBottom:12,borderBottom:"1px solid #0a1220"}}>
+        {[["전체","🌏 전체","#1d4ed8"],["한국","🇰🇷 한국","#0891b2"],["일본","🇯🇵 일본","#d97706"]].map(([key,label,color])=>(
+          <button key={key} onClick={()=>{ setCountryTab(key); setCsStatusTab(""); }}
+            style={{padding:"6px 18px",borderRadius:20,border:`1px solid ${countryTab===key?color:"#1e3a5f"}`,
+              background:countryTab===key?color:"transparent",color:countryTab===key?"#fff":"#4a6fa5",
+              fontWeight:700,fontSize:12,cursor:"pointer",transition:"all 0.2s"}}>
+            {label}
+          </button>
+        ))}
+        {/* 현재 컨텍스트 표시 */}
+        <span style={{marginLeft:"auto",fontSize:11,color:"#2d4a6e",alignSelf:"center"}}>
+          {marketTab==="Google"?"🤖":"🍎"} {marketTab} · {countryTab}
+        </span>
       </div>
 
       {/* 파일 업로드 — 1개 또는 2개 */}
       <div style={{background:"#0d1b2e",borderRadius:14,padding:16,marginBottom:16,border:"1px solid #1e3a5f"}}>
         <div style={{fontSize:13,fontWeight:700,color:"#c8d8f0",marginBottom:10}}>📁 엑셀 파일 업로드</div>
         <div style={{fontSize:11,color:"#2d4a6e",marginBottom:12}}>
-          파일 구조 자동 인식 — <span style={{color:"#3b82f6"}}>결제취소 악용 대상자 OrderID</span> 시트 + <span style={{color:"#22c55e"}}>결제취소 악용자 리스트</span> 시트
+          {marketTab==="Google" ? "Google AOS 파일" : "iOS 파일"} 업로드 — <span style={{color:marketTab==="Google"?"#3b82f6":"#a855f7"}}>{marketTab==="Google"?"결제취소 악용 대상자 OrderID":"ios 환불악용 유저 리스트"}</span> 시트 포함 파일
         </div>
 
         {/* 업로드된 파일 목록 */}
