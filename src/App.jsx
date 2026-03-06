@@ -169,13 +169,13 @@ function parseExcelFile(wb) {
         // G열 처리결과
         const resultText = String(row[ci.result] ?? "").trim();
 
-        let action = "처리중";
-        if (/회수/.test(resultText)) action = "회수";
-        else if (/제재|정지|ban/i.test(resultText)) action = "제재";
-        else if (resultText && resultText !== "-" && resultText.length > 0) {
-          const pVal = parseNum(ci.pValue >= 0 ? row[ci.pValue] : 0);
-          action = pVal >= 0 ? "회수" : "제재";
-        }
+        // G열 텍스트 기준: "제재" 포함→제재, "회수" 포함→회수, 둘다→둘다, 없음→미처리
+        const hasJesae = /제재/.test(resultText);
+        const hasHoesu = /회수/.test(resultText);
+        let action = "미처리";
+        if (hasJesae && hasHoesu) action = "제재+회수";
+        else if (hasJesae) action = "제재";
+        else if (hasHoesu) action = "회수";
 
         const pValue = parseNum(ci.pValue >= 0 ? row[ci.pValue] : 0);
         abuseRows.push({
@@ -467,23 +467,20 @@ export default function App() {
     const uniqueOids = [...new Set(filtered.map(d=>d.openid).filter(Boolean))];
     const uniqueUsers = uniqueOids.length;
 
-    // ★ 악용자 리스트 G열 기준: 회수/제재
-    // 필터된 유니크 OpenID → 악용자 리스트에서 처리결과 조회
-    let excelRecovered = 0, excelSanctioned = 0, excelProcessing = 0;
-    if (uniqueOids.length > 0 && Object.keys(allAbuseMap).length > 0) {
-      uniqueOids.forEach(oid => {
-        const abuse = allAbuseMap[oid];
-        if (!abuse) { excelProcessing++; return; }
-        if (abuse.action === "회수") excelRecovered++;
-        else if (abuse.action === "제재") excelSanctioned++;
-        else excelProcessing++;
-      });
-    } else {
-      // 악용자 리스트 전체 기준
-      excelRecovered = allAbuseRows.filter(a=>a.action==="회수").length;
-      excelSanctioned = allAbuseRows.filter(a=>a.action==="제재").length;
-      excelProcessing = allAbuseRows.filter(a=>a.action==="처리중").length;
-    }
+    // ★ 결제취소 악용자 리스트 B열 유니크 OpenID 기준, G열 회수/제재 집계
+    // "제재" 포함→제재, "회수" 포함→회수, 둘다→각각 카운트
+    let excelRecovered = 0, excelSanctioned = 0, excelBoth = 0, excelUnprocessed = 0;
+    // 악용자 리스트 B열 기준 유니크 OpenID
+    const abuseUniqueOids = [...new Set(allAbuseRows.map(a=>a.openid).filter(Boolean))];
+    abuseUniqueOids.forEach(oid => {
+      const abuse = allAbuseMap[oid];
+      if (!abuse) return;
+      if (abuse.action === "제재+회수") { excelSanctioned++; excelRecovered++; excelBoth++; }
+      else if (abuse.action === "회수") excelRecovered++;
+      else if (abuse.action === "제재") excelSanctioned++;
+      else excelUnprocessed++;
+    });
+    const totalAbuseUnique = abuseUniqueOids.length;
 
     // ★ Google Sheets 기준: 복구완료/재제재/처리중
     let respRecovered = 0, respResanctioned = 0, respProcessing = 0, totalResp = 0;
@@ -519,11 +516,12 @@ export default function App() {
 
     return {
       totalOrders, uniqueUsers,
-      // 악용자 리스트 G열 기준
-      totalAbuse: allAbuseRows.length,
+      // 악용자 리스트 B열 유니크 기준, G열 집계
+      totalAbuseUnique,
       recovered: excelRecovered,
       sanctioned: excelSanctioned,
-      excelProcessing,
+      excelBoth,
+      excelUnprocessed,
       // Google Sheets 기준
       respRecovered, respResanctioned, respProcessing, totalResp,
       segStats
@@ -579,7 +577,7 @@ export default function App() {
       유니크유저: stats.uniqueUsers,
       연도별: Object.fromEntries(yearlyChart.map(d=>[d.year+"년", Object.entries(d).filter(([k])=>k!=="year").reduce((s,[,v])=>s+v,0)])),
       세그먼트별: stats.segStats,
-      악용자리스트: { 전체:stats.totalAbuse, 회수:stats.recovered, 제재:stats.sanctioned },
+      악용자리스트: { 유니크OpenID:stats.totalAbuseUnique, 회수:stats.recovered, 제재:stats.sanctioned },
       대응현황GoogleSheets: { 전체:stats.totalResp, 복구완료:stats.respRecovered, 재제재:stats.respResanctioned, 처리중:stats.respProcessing },
     };
 
@@ -778,12 +776,10 @@ ${JSON.stringify(ctx,null,2)}
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:16}}>
             <Card icon="📋" label="총 환불 주문" value={fmt(stats.totalOrders)} sub="건수 기준" color="#3b82f6"/>
             <Card icon="👥" label="유니크 유저" value={fmt(stats.uniqueUsers)} sub="OpenID 기준" color="#8b5cf6"/>
-            <Card icon="🔄" label="회수 처리" value={fmt(stats.recovered)} sub={`${stats.totalAbuse?Math.round(stats.recovered/stats.totalAbuse*100):0}%`} color="#22d3ee"/>
-            <Card icon="🚫" label="제재 처리" value={fmt(stats.sanctioned)} sub={`${stats.totalAbuse?Math.round(stats.sanctioned/stats.totalAbuse*100):0}%`} color="#ef4444"/>
-            {hasResp && <>
-              <Card icon="✅" label="복구 완료" value={fmt(stats.respRecovered)} sub={`${stats.totalResp?Math.round(stats.respRecovered/stats.totalResp*100):0}%`} color="#22c55e"/>
-              <Card icon="⏳" label="처리중" value={fmt(stats.respProcessing)} sub={`${stats.totalResp?Math.round(stats.respProcessing/stats.totalResp*100):0}%`} color="#f59e0b"/>
-            </>}
+            <Card icon="🔄" label="회수 처리" value={fmt(stats.recovered)}
+              sub={`${stats.totalAbuseUnique?Math.round(stats.recovered/stats.totalAbuseUnique*100):0}% (${fmt(stats.totalAbuseUnique)}명 중)`} color="#22d3ee"/>
+            <Card icon="🚫" label="제재 처리" value={fmt(stats.sanctioned)}
+              sub={`${stats.totalAbuseUnique?Math.round(stats.sanctioned/stats.totalAbuseUnique*100):0}% (${fmt(stats.totalAbuseUnique)}명 중)`} color="#ef4444"/>
           </div>
 
           <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12,marginBottom:12}}>
