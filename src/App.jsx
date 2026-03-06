@@ -13,8 +13,8 @@ const TABS = ["마켓 환불 현황", "연도별 분석", "세그먼트", "CS대
 const GSHEET_TARGETS = [
   { label: "한국 AOS", country: "한국", platform: "Google", gid: "0" },
   { label: "한국 iOS", country: "한국", platform: "iOS", gid: "123906372" },
-  { label: "일본 Google", country: "일본", platform: "Google", gid: "1689075940" },
-  { label: "일본 Apple", country: "일본", platform: "iOS", gid: "849352972" },
+  { label: "일본 Google", country: "일본", platform: "Google", gid: "849352972" },
+  { label: "일본 Apple", country: "일본", platform: "iOS", gid: "1689075940" },
 ];
 
 const CURRENCY_COUNTRY = { KRW: "한국", JPY: "일본" };
@@ -674,9 +674,14 @@ export default function App() {
       if (sv.status==="재제재") segResanctioned[abuse.segment]=(segResanctioned[abuse.segment]||0)+1;
     });
 
-    // 6. 환불 금액 (통화별)
+    // 6. 환불 금액 - OrderID 시트 기준 (amount 있는 행만)
     const amountByCountry = { 한국:0, 일본:0, 기타:0 };
-    filtered.filter(d=>d.type==="UC보유정보").forEach(d => {
+    // UC보유정보 + OrderID 시트 모두에서 금액 합산 (중복 주문번호 제거)
+    const seenOrders = new Set();
+    allOrderRows.filter(d=>d.amount>0).forEach(d => {
+      const key = d.orderNo || d.openid + "_" + d.date;
+      if (seenOrders.has(key)) return;
+      seenOrders.add(key);
       const krw = Math.abs(d.amount||0);
       if (d.country==="한국") amountByCountry["한국"]+=krw;
       else if (d.country==="일본") amountByCountry["일본"]+=krw;
@@ -698,8 +703,8 @@ export default function App() {
   // ── 연도별 차트/테이블 ──
   const yearlyChart = useMemo(() => {
     const g = {};
-    // 주문건수: UC보유정보 기준
-    allOrderRows.filter(d=>d.type==="UC보유정보").forEach(d => {
+    // 주문건수: UC보유정보 기준 + segFilter 적용
+    allOrderRows.filter(d=>d.type==="UC보유정보"&&(segFilter==="전체"||d.segment===segFilter)).forEach(d => {
       if (!d.year) return;
       if (!g[d.year]) g[d.year] = { year:d.year, "Google·한국":0, "Google·일본":0, "iOS·한국":0, "iOS·일본":0, "기타":0 };
       const k = `${d.platform}·${d.country}`;
@@ -717,10 +722,10 @@ export default function App() {
     return Object.values(g).sort((a,b)=>a.year.localeCompare(b.year));
   }, [allOrderRows, allAbuseRows]);
 
-  // 연도별 제재/복구/재제재 통계 (악용자 리스트 기준)
+  // 연도별 제재/복구/재제재 통계 (악용자 리스트 기준 + segFilter 적용)
   const yearlyAbuseStats = useMemo(() => {
     const g = {};
-    allAbuseRows.forEach(a => {
+    allAbuseRows.filter(a => segFilter==="전체" || a.segment===segFilter).forEach(a => {
       // 연도: UC보유정보에서 해당 OpenID의 연도 가져오기
       const uc = allOrderRows.find(d=>d.openid===a.openid&&d.type==="UC보유정보");
       const year = uc?.year;
@@ -734,7 +739,10 @@ export default function App() {
       else if (sv?.status==="재제재") g[year].resanctioned++;
     });
     return g;
-  }, [allAbuseRows, allOrderRows, sheetOidMap]);
+  }, [allAbuseRows, allOrderRows, sheetOidMap, segFilter]);
+
+  // yearlyChart도 segFilter 적용
+  
 
   const monthlyChart = useMemo(() => {
     const src = yearFilter==="전체" ? allOrderRows : filtered;
