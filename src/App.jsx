@@ -108,7 +108,7 @@ function parseExcelFile(wb) {
 
     // ━━━ 시트1: 악용 대상자 UC 보유 정보 ━━━
     // → 주문건수 + 유니크 OpenID + 날짜 + 화폐(국가)
-    if (sLower.includes("uc 보유") || sLower.includes("uc보유") || sLower.includes("보유 정보") || sLower.includes("보유정보")) {
+    if (sLower.includes("uc 보유") || sLower.includes("uc보유") || sLower.includes("보유 정보") || sLower.includes("보유정보") || sLower.includes("악용 대상자 uc") || sLower.includes("악용대상자uc")) {
       const ci = {
         openid: fc("오픈 아이디","오픈아이디","openid","open id","open_id","오픈 id","오픈id"),
         orderNo: fc("주문번호","order number","order no","orderid"),
@@ -143,7 +143,8 @@ function parseExcelFile(wb) {
     // ━━━ 시트2: 결제취소 악용자 리스트 ━━━
     // → OpenID + G열(회수/제재) 최종 처리결과
     else if (sLower.includes("악용자 리스트") || sLower.includes("악용자리스트") ||
-             (sLower.includes("악용자") && sLower.includes("리스트"))) {
+             (sLower.includes("악용자") && sLower.includes("리스트")) ||
+             sLower.includes("결제취소 악용자")) {
       // A:화폐 B:OPENID C:악용횟수 D:누적획득UC E:현재보유UC F:P값 G:처리결과
       const ci = {
         currency: fc("화폐","currency") >= 0 ? fc("화폐","currency") : 0,
@@ -189,6 +190,7 @@ function parseExcelFile(wb) {
       }
       log.push({ sheet: sName, type: "악용자", count: parsed });
     }
+    // 계산하기, Sheet1 등 기타 시트는 무시
   });
 
   // OpenID → country/platform 매핑
