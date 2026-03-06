@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+、import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from "recharts";
 import * as XLSX from "xlsx";
 
@@ -8,7 +8,7 @@ import * as XLSX from "xlsx";
 const fmt = n => (n || 0).toLocaleString();
 const TT = { contentStyle: { background: "#060d18", border: "1px solid #1e3a5f", borderRadius: 8, fontSize: 11 } };
 const SHEET_ID = "1xySVvqx0DXiox8fkvMAr86WzP1hTdHzJuxf63iop6l8";
-const TABS = ["전체 현황", "연도별 분석", "세그먼트", "대응 현황", "유저 조회", "AI 분석"];
+const TABS = ["마켓 환불 현황", "연도별 분석", "세그먼트", "CS대응현황", "유저 조회", "AI 분석"];
 
 const GSHEET_TARGETS = [
   { label: "한국 AOS", country: "한국", platform: "Google", gid: "0" },
@@ -323,7 +323,7 @@ const Card = ({ icon, label, value, sub, color="#3b82f6" }) => (
 // 메인 앱
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 export default function App() {
-  const [tab, setTab] = useState("전체 현황");
+  const [tab, setTab] = useState("마켓 환불 현황");
   const [yearFilter, setYearFilter] = useState("전체");
   const [segFilter, setSegFilter] = useState("전체");
 
@@ -766,7 +766,7 @@ ${JSON.stringify(ctx,null,2)}
       </div>
 
       {/* ━━━ 전체 현황 ━━━ */}
-      {tab==="전체 현황" && (<>
+      {tab==="마켓 환불 현황" && (<>
         <FilterBar/>
         {!hasData ? (
           <div style={{background:"#0d1b2e",borderRadius:14,padding:40,textAlign:"center",color:"#2d4a6e",fontSize:13,border:"1px dashed #1e3a5f"}}>
@@ -814,22 +814,7 @@ ${JSON.stringify(ctx,null,2)}
             </div>
           </div>
 
-          {hasResp && (
-            <div style={{background:"#0d1b2e",borderRadius:14,padding:18,border:"1px solid #1e3a5f"}}>
-              <div style={{fontSize:13,color:"#4a6fa5",fontWeight:600,marginBottom:14}}>대응현황 추이 (Google Sheets 기준)</div>
-              <ResponsiveContainer width="100%" height={180}>
-                <BarChart data={respTrend}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#0a1220"/>
-                  <XAxis dataKey="month" tick={{fill:"#2d4a6e",fontSize:10}}/>
-                  <YAxis tick={{fill:"#2d4a6e",fontSize:10}}/>
-                  <Tooltip {...TT}/><Legend wrapperStyle={{fontSize:11}}/>
-                  <Bar dataKey="복구완료" fill="#22c55e" stackId="a"/>
-                  <Bar dataKey="재제재" fill="#ef4444" stackId="a"/>
-                  <Bar dataKey="처리중" fill="#f59e0b" stackId="a"/>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
+
         </>)}
       </>)}
 
@@ -888,10 +873,19 @@ ${JSON.stringify(ctx,null,2)}
             {Object.entries(SEG_COLORS).map(([seg,color])=>{
               const [platform,country] = seg.split("_");
               const orders = filtered.filter(d=>d.segment===seg);
-              const abuse = allAbuseRows.filter(a=>a.segment===seg);
-              const recovered = abuse.filter(a=>a.action==="회수").length;
-              const sanctioned = abuse.filter(a=>a.action==="제재").length;
-              const uniqueUsers = new Set(orders.map(d=>d.openid).filter(Boolean)).size;
+              // 악용자 리스트 B열 기준 유니크 OpenID (해당 세그먼트)
+              const abuseInSeg = allAbuseRows.filter(a=>a.segment===seg);
+              const abuseUniqueOids = [...new Set(abuseInSeg.map(a=>a.openid).filter(Boolean))];
+              const uniqueUsers = abuseUniqueOids.length;
+              // G열 텍스트 기준 회수/제재
+              let recovered = 0, sanctioned = 0;
+              abuseUniqueOids.forEach(oid => {
+                const a = allAbuseMap[oid];
+                if (!a) return;
+                if (a.action === "회수" || a.action === "제재+회수") recovered++;
+                if (a.action === "제재" || a.action === "제재+회수") sanctioned++;
+              });
+              const abuse = abuseInSeg;
               return (
                 <div key={seg} style={{background:"#0d1b2e",borderRadius:14,padding:18,border:`1px solid ${color}33`,borderTop:`3px solid ${color}`}}>
                   <div style={{fontSize:14,fontWeight:800,color,marginBottom:14}}>
@@ -931,7 +925,7 @@ ${JSON.stringify(ctx,null,2)}
       </>)}
 
       {/* ━━━ 대응 현황 ━━━ */}
-      {tab==="대응 현황" && (<>
+      {tab==="CS대응현황" && (<>
         <SheetBox/>
         <FilterBar/>
         {!hasResp ? (
@@ -943,7 +937,7 @@ ${JSON.stringify(ctx,null,2)}
             <Card icon="📋" label="총 대응건수" value={fmt(filteredResp.length)} sub="행 기준" color="#3b82f6"/>
             <Card icon="✅" label="복구 완료" value={fmt(stats.respRecovered)} sub={`${stats.totalResp?Math.round(stats.respRecovered/stats.totalResp*100):0}%`} color="#22c55e"/>
             <Card icon="🚫" label="재제재" value={fmt(stats.respResanctioned)} sub={`${stats.totalResp?Math.round(stats.respResanctioned/stats.totalResp*100):0}%`} color="#ef4444"/>
-            <Card icon="⏳" label="처리중" value={fmt(stats.respProcessing)} sub={`${stats.totalResp?Math.round(stats.respProcessing/stats.totalResp*100):0}%`} color="#f59e0b"/>
+
           </div>
           <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12}}>
             <div style={{background:"#0d1b2e",borderRadius:14,padding:18,border:"1px solid #1e3a5f"}}>
