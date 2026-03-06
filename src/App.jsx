@@ -620,92 +620,121 @@ export default function App() {
 
   // ── 핵심 통계 ──
   const stats = useMemo(() => {
-    // 총 주문건수 (UC보유정보 시트 건수만)
+    // 1. 총 주문건수 (UC보유정보 시트 건수만)
     const totalOrders = filtered.filter(d=>d.type==="UC보유정보").length;
 
-    // ★ 유니크 OpenID (연도/세그먼트 필터 적용된 행에서 중복 제거)
-    const uniqueOids = [...new Set(filtered.map(d=>d.openid).filter(Boolean))];
-    const uniqueUsers = uniqueOids.length;
-
-    // ★ 결제취소 악용자 리스트 B열 유니크 OpenID 기준, G열 회수/제재 집계
-    // "제재" 포함→제재, "회수" 포함→회수, 둘다→각각 카운트
-    let excelRecovered = 0, excelSanctioned = 0, excelBoth = 0, excelUnprocessed = 0;
-    // 악용자 리스트 B열 기준 유니크 OpenID
+    // 2. 악용자 리스트 유니크 OpenID (제재 기준)
     const abuseUniqueOids = [...new Set(allAbuseRows.map(a=>a.openid).filter(Boolean))];
+    const totalAbuseUnique = abuseUniqueOids.length;
+
+    // 3. 제재/회수 집계 (악용자 리스트 G열 기준)
+    let excelSanctioned = 0, excelRecovered = 0, excelBoth = 0;
     abuseUniqueOids.forEach(oid => {
       const abuse = allAbuseMap[oid];
       if (!abuse) return;
       if (abuse.action === "제재+회수") { excelSanctioned++; excelRecovered++; excelBoth++; }
-      else if (abuse.action === "회수") excelRecovered++;
       else if (abuse.action === "제재") excelSanctioned++;
-      else excelUnprocessed++;
+      else if (abuse.action === "회수") excelRecovered++;
     });
-    const totalAbuseUnique = abuseUniqueOids.length;
 
-    // ★ Google Sheets 기준: 복구완료/재제재/처리중
-    let respRecovered = 0, respResanctioned = 0, respProcessing = 0, totalResp = 0;
-    if (uniqueOids.length > 0 && Object.keys(sheetOidMap).length > 0) {
-      // 엑셀 유니크 OpenID → Google Sheets 최신 상태 매칭
-      uniqueOids.forEach(oid => {
-        const sheetData = sheetOidMap[oid];
-        if (sheetData) {
-          totalResp++;
-          if (sheetData.status === "복구완료") respRecovered++;
-          else if (sheetData.status === "재제재") respResanctioned++;
-          else respProcessing++;
-        }
-      });
-    } else if (uniqueOids.length === 0) {
-      // 엑셀 없으면 Sheets 전체 기준
-      const allSheetOids = Object.entries(sheetOidMap).filter(([,v]) => {
-        if (segFilter !== "전체") return getSeg(v.platform, v.country) === segFilter;
-        return true;
-      });
-      totalResp = allSheetOids.length;
-      respRecovered = allSheetOids.filter(([,v])=>v.status==="복구완료").length;
-      respResanctioned = allSheetOids.filter(([,v])=>v.status==="재제재").length;
-      respProcessing = allSheetOids.filter(([,v])=>v.status==="처리중").length;
-    }
+    // 4. 복구완료/재제재/처리중 (악용자 리스트 OpenID → sheetOidMap 매칭)
+    let respRecovered = 0, respResanctioned = 0, respProcessing = 0;
+    abuseUniqueOids.forEach(oid => {
+      const sv = sheetOidMap[oid];
+      if (!sv) { respProcessing++; return; } // 미매칭 → 처리중
+      if (sv.status === "복구완료") respRecovered++;
+      else if (sv.status === "재제재") respResanctioned++;
+      else respProcessing++;
+    });
+    const totalResp = totalAbuseUnique;
 
-    // 세그먼트별
+    // 5. 세그먼트별 (UC보유정보 기준)
     const segStats = {};
-    filtered.forEach(d => { segStats[d.segment]=(segStats[d.segment]||0)+1; });
-    if (filtered.length === 0 && responseData.length > 0) {
-      responseData.forEach(d => { segStats[d.segment]=(segStats[d.segment]||0)+1; });
-    }
-
-    // 환불 금액 (통화별)
-    const amountByCountry = { 한국:0, 일본:0, 기타:0 };
-    filtered.forEach(d => {
-      const krw = Math.abs(d.amount||0);
-      if (d.country === "한국") amountByCountry["한국"] += krw;
-      else if (d.country === "일본") amountByCountry["일본"] += krw;
-      else amountByCountry["기타"] += krw;
+    // 주문건수 기준
+    filtered.filter(d=>d.type==="UC보유정보").forEach(d => {
+      segStats[d.segment]=(segStats[d.segment]||0)+1;
     });
+    // 제재건수 기준 (세그먼트별)
+    const segSanctioned = {};
+    allAbuseRows.forEach(a => {
+      if (!a.openid) return;
+      const abuse = allAbuseMap[a.openid];
+      if (!abuse) return;
+      if (abuse.action==="제재"||abuse.action==="제재+회수") {
+        segSanctioned[a.segment]=(segSanctioned[a.segment]||0)+1;
+      }
+    });
+    // 복구수/재제재수 (세그먼트별)
+    const segRecovered = {}, segResanctioned = {};
+    abuseUniqueOids.forEach(oid => {
+      const abuse = allAbuseMap[oid];
+      const sv = sheetOidMap[oid];
+      if (!abuse||!sv) return;
+      if (sv.status==="복구완료") segRecovered[abuse.segment]=(segRecovered[abuse.segment]||0)+1;
+      if (sv.status==="재제재") segResanctioned[abuse.segment]=(segResanctioned[abuse.segment]||0)+1;
+    });
+
+    // 6. 환불 금액 (통화별)
+    const amountByCountry = { 한국:0, 일본:0, 기타:0 };
+    filtered.filter(d=>d.type==="UC보유정보").forEach(d => {
+      const krw = Math.abs(d.amount||0);
+      if (d.country==="한국") amountByCountry["한국"]+=krw;
+      else if (d.country==="일본") amountByCountry["일본"]+=krw;
+      else amountByCountry["기타"]+=krw;
+    });
+
+    // 7. 유니크 유저 (UC보유정보 기준)
+    const uniqueUsers = new Set(filtered.filter(d=>d.type==="UC보유정보").map(d=>d.openid).filter(Boolean)).size;
 
     return {
-      totalOrders, uniqueUsers,
-      totalAbuseUnique,
-      recovered: excelRecovered,
-      sanctioned: excelSanctioned,
-      excelBoth, excelUnprocessed,
+      totalOrders, uniqueUsers, totalAbuseUnique,
+      recovered: excelRecovered, sanctioned: excelSanctioned, excelBoth,
       respRecovered, respResanctioned, respProcessing, totalResp,
-      segStats, amountByCountry,
+      segStats, segSanctioned, segRecovered, segResanctioned,
+      amountByCountry,
     };
-  }, [filtered, allAbuseRows, allAbuseMap, sheetOidMap, responseData, segFilter]);
+  }, [filtered, allAbuseRows, allAbuseMap, sheetOidMap]);
 
-  // ── 연도별 차트 ──
+  // ── 연도별 차트/테이블 ──
   const yearlyChart = useMemo(() => {
     const g = {};
-    allOrderRows.forEach(d => {
+    // 주문건수: UC보유정보 기준
+    allOrderRows.filter(d=>d.type==="UC보유정보").forEach(d => {
       if (!d.year) return;
       if (!g[d.year]) g[d.year] = { year:d.year, "Google·한국":0, "Google·일본":0, "iOS·한국":0, "iOS·일본":0, "기타":0 };
       const k = `${d.platform}·${d.country}`;
       if (g[d.year][k]!==undefined) g[d.year][k]++;
       else g[d.year]["기타"]++;
     });
+    // 연도 없는 경우도 초기화
+    allAbuseRows.forEach(a => {
+      // 악용자 연도는 UC보유정보에서 매칭
+      const uc = allOrderRows.find(d=>d.openid===a.openid&&d.type==="UC보유정보");
+      const year = uc?.year;
+      if (!year) return;
+      if (!g[year]) g[year] = { year, "Google·한국":0, "Google·일본":0, "iOS·한국":0, "iOS·일본":0, "기타":0 };
+    });
     return Object.values(g).sort((a,b)=>a.year.localeCompare(b.year));
-  }, [allOrderRows]);
+  }, [allOrderRows, allAbuseRows]);
+
+  // 연도별 제재/복구/재제재 통계 (악용자 리스트 기준)
+  const yearlyAbuseStats = useMemo(() => {
+    const g = {};
+    allAbuseRows.forEach(a => {
+      // 연도: UC보유정보에서 해당 OpenID의 연도 가져오기
+      const uc = allOrderRows.find(d=>d.openid===a.openid&&d.type==="UC보유정보");
+      const year = uc?.year;
+      if (!year) return;
+      if (!g[year]) g[year] = { sanctioned:0, recovered:0, resanctioned:0 };
+      // 제재건수
+      if (a.action==="제재"||a.action==="제재+회수") g[year].sanctioned++;
+      // 복구수/재제재수: sheetOidMap 매칭
+      const sv = sheetOidMap[a.openid];
+      if (sv?.status==="복구완료") g[year].recovered++;
+      else if (sv?.status==="재제재") g[year].resanctioned++;
+    });
+    return g;
+  }, [allAbuseRows, allOrderRows, sheetOidMap]);
 
   const monthlyChart = useMemo(() => {
     const src = yearFilter==="전체" ? allOrderRows : filtered;
@@ -1052,21 +1081,16 @@ ${JSON.stringify(ctx,null,2)}
               <div style={{fontSize:13,color:"#4a6fa5",fontWeight:600}}>연도별 현황 테이블</div>
               <button onClick={()=>{
                 const rows = yearlyChart.map(row => {
-                  // 세그먼트별 복구/재제재 계산
-                  const getSegStats = (platform, country) => {
-                    const oids = [...new Set(allOrderRows.filter(d=>d.year===row.year&&d.platform===platform&&d.country===country).map(d=>d.openid).filter(Boolean))];
-                    let rec=0,res=0;
-                    oids.forEach(oid=>{ const sv=sheetOidMap[oid]; if(!sv) return; if(sv.status==="복구완료") rec++; if(sv.status==="재제재") res++; });
-                    return { orders: row[`${platform==="Google"?"Google":"iOS"}·${country}`]||0, rec, res, rate: oids.length?Math.round(rec/oids.length*100):0 };
-                  };
-                  const krAos=getSegStats("Google","한국"), jpAos=getSegStats("Google","일본");
-                  const krIos=getSegStats("iOS","한국"), jpIos=getSegStats("iOS","일본");
+                  const yas = yearlyAbuseStats[row.year]||{sanctioned:0,recovered:0,resanctioned:0};
+                  const orders = (row["Google·한국"]||0)+(row["Google·일본"]||0)+(row["iOS·한국"]||0)+(row["iOS·일본"]||0)+(row["기타"]||0);
                   return {
                     "연도": row.year+"년",
-                    "한국AOS_주문": krAos.orders, "한국AOS_복구수": krAos.rec, "한국AOS_복구율": krAos.rate+"%",
-                    "일본AOS_주문": jpAos.orders, "일본AOS_복구수": jpAos.rec, "일본AOS_복구율": jpAos.rate+"%",
-                    "한국iOS_주문": krIos.orders, "한국iOS_복구수": krIos.rec, "한국iOS_복구율": krIos.rate+"%",
-                    "일본iOS_주문": jpIos.orders, "일본iOS_복구수": jpIos.rec, "일본iOS_복구율": jpIos.rate+"%",
+                    "주문건수": orders,
+                    "제재건수": yas.sanctioned,
+                    "복구수": yas.recovered,
+                    "복구율": yas.sanctioned?Math.round(yas.recovered/yas.sanctioned*100)+"%":"0%",
+                    "재제재수": yas.resanctioned,
+                    "재제재율": yas.sanctioned?Math.round(yas.resanctioned/yas.sanctioned*100)+"%":"0%",
                   };
                 });
                 const ws = XLSX.utils.json_to_sheet(rows);
@@ -1080,75 +1104,55 @@ ${JSON.stringify(ctx,null,2)}
             <div style={{overflowX:"auto"}}>
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
                 <thead>
-                  {/* 그룹 헤더 */}
-                  <tr style={{background:"#060d18"}}>
-                    <th rowSpan={2} style={{padding:"8px 10px",textAlign:"left",color:"#2d4a6e",fontWeight:600,whiteSpace:"nowrap",borderBottom:"1px solid #1e3a5f"}}>연도</th>
-                    <th colSpan={3} style={{padding:"8px 10px",textAlign:"center",color:"#3b82f6",borderBottom:"2px solid #3b82f644",whiteSpace:"nowrap"}}>🇰🇷 한국 AOS</th>
-                    <th colSpan={3} style={{padding:"8px 10px",textAlign:"center",color:"#06b6d4",borderBottom:"2px solid #06b6d444",whiteSpace:"nowrap",borderLeft:"1px solid #1e3a5f"}}>🇯🇵 일본 AOS</th>
-                    <th colSpan={3} style={{padding:"8px 10px",textAlign:"center",color:"#a855f7",borderBottom:"2px solid #a855f744",whiteSpace:"nowrap",borderLeft:"1px solid #1e3a5f"}}>🇰🇷 한국 iOS</th>
-                    <th colSpan={3} style={{padding:"8px 10px",textAlign:"center",color:"#ec4899",borderBottom:"2px solid #ec489944",whiteSpace:"nowrap",borderLeft:"1px solid #1e3a5f"}}>🇯🇵 일본 iOS</th>
-                  </tr>
                   <tr style={{background:"#060d18",borderBottom:"1px solid #1e3a5f"}}>
-                    {[["#3b82f6","#3b82f6","#3b82f6"],["#06b6d4","#06b6d4","#06b6d4"],["#a855f7","#a855f7","#a855f7"],["#ec4899","#ec4899","#ec4899"]].map((cols,gi)=>
-                      ["주문건수","복구수","복구율"].map((h,hi)=>(
-                        <th key={`${gi}-${hi}`} style={{padding:"6px 10px",textAlign:"center",color:cols[hi],fontWeight:600,whiteSpace:"nowrap",borderLeft:hi===0&&gi>0?"1px solid #1e3a5f":"none"}}>{h}</th>
-                      ))
-                    )}
+                    {[
+                      {label:"연도",color:"#2d4a6e"},
+                      {label:"주문건수",color:"#3b82f6"},{label:"제재건수",color:"#ef4444"},
+                      {label:"복구수",color:"#22c55e"},{label:"복구율",color:"#22c55e"},
+                      {label:"재제재수",color:"#f59e0b"},{label:"재제재율",color:"#f59e0b"},
+                    ].map(({label,color})=>(
+                      <th key={label} style={{padding:"8px 10px",textAlign:"center",color,fontWeight:600,whiteSpace:"nowrap"}}>{label}</th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
                   {yearlyChart.map((row,i)=>{
-                    const getSegStats = (platform, country) => {
-                      const oids = [...new Set(allOrderRows.filter(d=>d.year===row.year&&d.platform===platform&&d.country===country).map(d=>d.openid).filter(Boolean))];
-                      let rec=0,res=0;
-                      oids.forEach(oid=>{ const sv=sheetOidMap[oid]; if(!sv) return; if(sv.status==="복구완료") rec++; if(sv.status==="재제재") res++; });
-                      const orders = row[`${platform==="Google"?"Google":"iOS"}·${country}`]||0;
-                      const rate = oids.length?Math.round(rec/oids.length*100):0;
-                      return { orders, rec, rate };
-                    };
-                    const krAos=getSegStats("Google","한국"), jpAos=getSegStats("Google","일본");
-                    const krIos=getSegStats("iOS","한국"), jpIos=getSegStats("iOS","일본");
-                    const segs = [
-                      {s:krAos, c:"#3b82f6"}, {s:jpAos, c:"#06b6d4"},
-                      {s:krIos, c:"#a855f7"}, {s:jpIos, c:"#ec4899"}
-                    ];
+                    const yas = yearlyAbuseStats[row.year]||{sanctioned:0,recovered:0,resanctioned:0};
+                    const orders = (row["Google·한국"]||0)+(row["Google·일본"]||0)+(row["iOS·한국"]||0)+(row["iOS·일본"]||0)+(row["기타"]||0);
+                    const recRate = yas.sanctioned?Math.round(yas.recovered/yas.sanctioned*100):0;
+                    const resRate = yas.sanctioned?Math.round(yas.resanctioned/yas.sanctioned*100):0;
                     return (
-                      <tr key={i} style={{borderBottom:"1px solid #0a1220",background:yearFilter===row.year?"#0a1528":"transparent"}}>
-                        <td style={{padding:"8px 10px",fontWeight:700,color:"#e8f4ff",whiteSpace:"nowrap"}}>{row.year}년</td>
-                        {segs.map(({s,c},si)=>(
-                          <>
-                            <td key={`${si}-o`} style={{padding:"7px 10px",color:c,textAlign:"center",borderLeft:si>0?"1px solid #0a1220":"none"}}>{fmt(s.orders)}</td>
-                            <td key={`${si}-r`} style={{padding:"7px 10px",color:"#22c55e",textAlign:"center",fontWeight:700}}>{fmt(s.rec)}</td>
-                            <td key={`${si}-p`} style={{padding:"7px 10px",color:"#22c55e",textAlign:"center"}}>{s.rate}%</td>
-                          </>
-                        ))}
+                      <tr key={i} style={{borderBottom:"1px solid #0a1220",background:yearFilter===row.year?"#0a1528":"transparent"}}
+                        onMouseEnter={e=>e.currentTarget.style.background="#0a1528"}
+                        onMouseLeave={e=>e.currentTarget.style.background=yearFilter===row.year?"#0a1528":"transparent"}>
+                        <td style={{padding:"8px 10px",fontWeight:700,color:"#e8f4ff",textAlign:"center"}}>{row.year}년</td>
+                        <td style={{padding:"7px 10px",color:"#3b82f6",textAlign:"center",fontWeight:700}}>{fmt(orders)}</td>
+                        <td style={{padding:"7px 10px",color:"#ef4444",textAlign:"center",fontWeight:700}}>{fmt(yas.sanctioned)}</td>
+                        <td style={{padding:"7px 10px",color:"#22c55e",textAlign:"center",fontWeight:700}}>{fmt(yas.recovered)}</td>
+                        <td style={{padding:"7px 10px",color:"#22c55e",textAlign:"center"}}>{recRate}%</td>
+                        <td style={{padding:"7px 10px",color:"#f59e0b",textAlign:"center",fontWeight:700}}>{fmt(yas.resanctioned)}</td>
+                        <td style={{padding:"7px 10px",color:"#f59e0b",textAlign:"center"}}>{resRate}%</td>
                       </tr>
                     );
                   })}
                   {/* 합계 행 */}
                   {(()=>{
-                    const segs2 = [
-                      {platform:"Google",country:"한국",c:"#3b82f6"},
-                      {platform:"Google",country:"일본",c:"#06b6d4"},
-                      {platform:"iOS",country:"한국",c:"#a855f7"},
-                      {platform:"iOS",country:"일본",c:"#ec4899"},
-                    ];
+                    const totOrders = yearlyChart.reduce((s,r)=>s+(r["Google·한국"]||0)+(r["Google·일본"]||0)+(r["iOS·한국"]||0)+(r["iOS·일본"]||0)+(r["기타"]||0),0);
+                    const totSanc = Object.values(yearlyAbuseStats).reduce((s,v)=>s+v.sanctioned,0);
+                    const totRec = Object.values(yearlyAbuseStats).reduce((s,v)=>s+v.recovered,0);
+                    const totRes = Object.values(yearlyAbuseStats).reduce((s,v)=>s+v.resanctioned,0);
                     return (
                       <tr style={{borderTop:"2px solid #1e3a5f",background:"#0a1528",fontWeight:700}}>
-                        <td style={{padding:"8px 10px",color:"#e8f4ff"}}>합계</td>
-                        {segs2.map(({platform,country,c},si)=>{
-                          const oids=[...new Set(allOrderRows.filter(d=>d.platform===platform&&d.country===country).map(d=>d.openid).filter(Boolean))];
-                          let rec=0;
-                          oids.forEach(oid=>{ const sv=sheetOidMap[oid]; if(sv?.status==="복구완료") rec++; });
-                          const orders = allOrderRows.filter(d=>d.platform===platform&&d.country===country).length;
-                          const rate = oids.length?Math.round(rec/oids.length*100):0;
-                          return (
-                            <>
-                              <td key={`t${si}-o`} style={{padding:"7px 10px",color:c,textAlign:"center",borderLeft:si>0?"1px solid #0a1220":"none"}}>{fmt(orders)}</td>
-                              <td key={`t${si}-r`} style={{padding:"7px 10px",color:"#22c55e",textAlign:"center"}}>{fmt(rec)}</td>
-                              <td key={`t${si}-p`} style={{padding:"7px 10px",color:"#22c55e",textAlign:"center"}}>{rate}%</td>
-                            </>
-                          );
+                        <td style={{padding:"8px 10px",color:"#e8f4ff",textAlign:"center"}}>합계</td>
+                        <td style={{padding:"7px 10px",color:"#3b82f6",textAlign:"center"}}>{fmt(totOrders)}</td>
+                        <td style={{padding:"7px 10px",color:"#ef4444",textAlign:"center"}}>{fmt(totSanc)}</td>
+                        <td style={{padding:"7px 10px",color:"#22c55e",textAlign:"center"}}>{fmt(totRec)}</td>
+                        <td style={{padding:"7px 10px",color:"#22c55e",textAlign:"center"}}>{totSanc?Math.round(totRec/totSanc*100):0}%</td>
+                        <td style={{padding:"7px 10px",color:"#f59e0b",textAlign:"center"}}>{fmt(totRes)}</td>
+                        <td style={{padding:"7px 10px",color:"#f59e0b",textAlign:"center"}}>{totSanc?Math.round(totRes/totSanc*100):0}%</td>
+                      </tr>
+                    );
+                  })()}
                         })}
                       </tr>
                     );
