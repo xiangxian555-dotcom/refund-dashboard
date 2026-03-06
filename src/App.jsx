@@ -1,4 +1,4 @@
-、import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from "recharts";
 import * as XLSX from "xlsx";
 
@@ -775,7 +775,7 @@ ${JSON.stringify(ctx,null,2)}
         ) : (<>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:16}}>
             <Card icon="📋" label="총 환불 주문" value={fmt(stats.totalOrders)} sub="건수 기준" color="#3b82f6"/>
-            <Card icon="👥" label="유니크 유저" value={fmt(stats.uniqueUsers)} sub="OpenID 기준" color="#8b5cf6"/>
+
             <Card icon="🔄" label="회수 처리" value={fmt(stats.recovered)}
               sub={`${stats.totalAbuseUnique?Math.round(stats.recovered/stats.totalAbuseUnique*100):0}% (${fmt(stats.totalAbuseUnique)}명 중)`} color="#22d3ee"/>
             <Card icon="🚫" label="제재 처리" value={fmt(stats.sanctioned)}
@@ -893,7 +893,7 @@ ${JSON.stringify(ctx,null,2)}
                   </div>
                   {[
                     ["환불 주문",fmt(orders.length)+"건","#c8d8f0"],
-                    ["유니크 유저",fmt(uniqueUsers)+"명","#8b5cf6"],
+
                     ["회수 처리",fmt(recovered)+"명","#22d3ee"],
                     ["제재 처리",fmt(sanctioned)+"명","#ef4444"],
                   ].map(([l,v,c])=>(
