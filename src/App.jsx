@@ -585,13 +585,6 @@ export default function App() {
     return true;
   }), [allOrderRows, yearFilter, monthFilter, segFilter]);
 
-  const filteredResp = useMemo(() => filteredResponseData.filter(d => {
-    if (yearFilter!=="전체" && d.year!==yearFilter) return false;
-    if (monthFilter!=="전체" && d.month!==monthFilter) return false;
-    if (segFilter!=="전체" && d.segment!==segFilter) return false;
-    return true;
-  }), [filteredResponseData, yearFilter, monthFilter, segFilter]);
-
   // 환율 변환 함수
   const toKRW = useCallback((amount, currency) => {
     const rate = exchangeRates[String(currency||"KRW").trim().toUpperCase()] || 1;
@@ -600,11 +593,17 @@ export default function App() {
 
   // ── Google Sheets: marketTab/countryTab 기준 필터된 responseData ──
   const filteredResponseData = useMemo(() => responseData.filter(d => {
-    // Google탭 → platform=Google 시트만, iOS탭 → platform=iOS 시트만
     if (marketTab !== "전체" && d.platform !== marketTab) return false;
     if (countryTab !== "전체" && d.country !== countryTab) return false;
     return true;
   }), [responseData, marketTab, countryTab]);
+
+  const filteredResp = useMemo(() => filteredResponseData.filter(d => {
+    if (yearFilter!=="전체" && d.year!==yearFilter) return false;
+    if (monthFilter!=="전체" && d.month!==monthFilter) return false;
+    if (segFilter!=="전체" && d.segment!==segFilter) return false;
+    return true;
+  }), [filteredResponseData, yearFilter, monthFilter, segFilter]);
 
   // OpenID → 최신 상태 맵
   const sheetOidMap = useMemo(() => {
