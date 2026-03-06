@@ -176,6 +176,7 @@ function parseExcelFile(wb) {
           action = pVal >= 0 ? "회수" : "제재";
         }
 
+        const pValue = parseNum(ci.pValue >= 0 ? row[ci.pValue] : 0);
         abuseRows.push({
           openid, currency, country, platform,
           abuseCount: parseNum(row[ci.abuseCount]),
@@ -347,6 +348,13 @@ export default function App() {
   const [searchQ, setSearchQ] = useState("");
   const [searchRes, setSearchRes] = useState(null);
 
+  // 토스트 알림
+  const [toast, setToast] = useState(null);
+  const showToast = (msg, color="#22c55e") => {
+    setToast({ msg, color });
+    setTimeout(() => setToast(null), 3000);
+  };
+
   // ── 파일 업로드 ──
   const handleFile = useCallback(async (file) => {
     if (!file) return;
@@ -362,7 +370,11 @@ export default function App() {
         return [...prev.slice(-1), entry]; // 최대 2개 유지
       });
       setUploadLog(parsed.log);
-    } catch(e) { alert("파싱 오류: " + e.message); }
+      const orderCount = parsed.orderRows.length;
+      const uniqueCount = parsed.uniqueOidSet ? parsed.uniqueOidSet.size : 0;
+      const abuseCount = parsed.abuseRows.length;
+      showToast(`✅ ${file.name.slice(0,20)}... 업로드 완료! 주문 ${orderCount}건 · 유니크 ${uniqueCount}명 · 악용자 ${abuseCount}명`);
+    } catch(e) { showToast("❌ 파싱 오류: " + e.message, "#ef4444"); }
   }, []);
 
   // ── Google Sheets 불러오기 (API Route 방식) ──
@@ -676,6 +688,14 @@ ${JSON.stringify(ctx,null,2)}
 
   return (
     <div style={{fontFamily:"'Pretendard','Apple SD Gothic Neo',sans-serif",background:"#060d18",minHeight:"100vh",color:"#c8d8f0",padding:18}}>
+      {toast && (
+        <div style={{position:"fixed",bottom:32,left:"50%",transform:"translateX(-50%)",zIndex:9999,
+          background:toast.color,color:"#fff",padding:"14px 28px",borderRadius:14,
+          fontWeight:700,fontSize:13,boxShadow:"0 4px 24px rgba(0,0,0,0.6)",
+          whiteSpace:"nowrap",maxWidth:"90vw",overflow:"hidden",textOverflow:"ellipsis"}}>
+          {toast.msg}
+        </div>
+      )}
 
       {/* 헤더 */}
       <div style={{marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
