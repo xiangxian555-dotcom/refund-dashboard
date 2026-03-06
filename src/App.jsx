@@ -1153,10 +1153,6 @@ ${JSON.stringify(ctx,null,2)}
                       </tr>
                     );
                   })()}
-                        })}
-                      </tr>
-                    );
-                  })()}
                 </tbody>
               </table>
             </div>
