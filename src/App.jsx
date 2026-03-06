@@ -115,6 +115,7 @@ function parseExcelFile(wb) {
         currency: fc("화폐","currency","통화"),
         ucBalance: fc("uc잔액","uc 잔액","잔액","현재 보유","현재보유"),
         time: fc("시간","time","날짜","date","기간"),
+        amount: fc("charged amount","item price","payamt","금액","amount","무료 uc 잔액"),
       };
       let parsed = 0;
       for (let i = headerIdx + 1; i < raw.length; i++) {
@@ -129,18 +130,57 @@ function parseExcelFile(wb) {
                          (detectPlatform(sName) || "Google");
         const dateRaw = ci.time >= 0 ? row[ci.time] : "";
         const date = parseDate(String(dateRaw||"")) || "";
-        const amountRaw = fc("charged amount","item price","금액","payamt","amount");
-        const amount = Math.abs(parseNum(amountRaw >= 0 ? row[amountRaw] : 0));
+        const amount = Math.abs(parseNum(ci.amount >= 0 ? row[ci.amount] : 0));
         orderRows.push({
           orderNo, openid, currency, country, platform,
           date, year: date.slice(0,4), month: date.slice(0,7),
           ucBalance: parseNum(ci.ucBalance >= 0 ? row[ci.ucBalance] : 0),
-          amount,
+          amount, type: "UC보유정보",
           segment: getSeg(platform, country),
         });
         parsed++;
       }
       log.push({ sheet: sName, type: "UC보유정보", count: parsed });
+    }
+
+    // ━━━ 시트1b: 결제취소 악용 대상자 OrderID (구글 마켓 원본) ━━━
+    // → 주문번호 + OpenID + 금액 + 날짜
+    else if (sLower.includes("orderid") || sLower.includes("악용 대상자 order") || sLower.includes("대상자 orderid")) {
+      const ci = {
+        orderNo: fc("order number","주문번호","orderid","order no"),
+        openid: fc("오픈 아이디","openid","open id","오픈아이디"),
+        currency: fc("currency of sale","화폐","currency","currencytype"),
+        amount: fc("charged amount","item price","payamt","금액"),
+        time: fc("order charged date","orderdate","시간","date","날짜","ordertime"),
+      };
+      // OrderID 시트에 openid 없을 수도 있음 - orderNo만으로도 파싱
+      let parsed = 0;
+      for (let i = headerIdx + 1; i < raw.length; i++) {
+        const row = raw[i];
+        const orderNo = String(row[ci.orderNo] ?? "").trim();
+        if (!orderNo) continue;
+        // 이미 UC보유정보에서 같은 주문번호가 있으면 금액만 업데이트
+        const existing = orderRows.find(o => o.orderNo === orderNo);
+        const amount = Math.abs(parseNum(ci.amount >= 0 ? row[ci.amount] : 0));
+        if (existing) {
+          if (amount > 0) existing.amount = amount;
+        } else {
+          const openid = String(row[ci.openid] ?? "").trim();
+          const currency = String(row[ci.currency] ?? "KRW").trim().toUpperCase() || "KRW";
+          const country = getCountry(currency);
+          const platform = orderNo.toUpperCase().startsWith("GPA") ? "Google" : "iOS";
+          const dateRaw = ci.time >= 0 ? row[ci.time] : "";
+          const date = parseDate(String(dateRaw||"")) || "";
+          orderRows.push({
+            orderNo, openid, currency, country, platform,
+            date, year: date.slice(0,4), month: date.slice(0,7),
+            ucBalance: 0, amount,
+            segment: getSeg(platform, country),
+          });
+          parsed++;
+        }
+      }
+      log.push({ sheet: sName, type: "OrderID", count: parsed });
     }
 
     // ━━━ 시트2: 결제취소 악용자 리스트 ━━━
@@ -172,13 +212,14 @@ function parseExcelFile(wb) {
         // G열 처리결과
         const resultText = String(row[ci.result] ?? "").trim();
 
-        // G열 텍스트 기준: "제재" 포함→제재, "회수" 포함→회수, 둘다→둘다, 없음→미처리
+        // G열 텍스트 기준: "제재" 포함→제재, "회수" 포함→회수, "uc부족"→미처리
         const hasJesae = /제재/.test(resultText);
         const hasHoesu = /회수/.test(resultText);
         let action = "미처리";
         if (hasJesae && hasHoesu) action = "제재+회수";
         else if (hasJesae) action = "제재";
         else if (hasHoesu) action = "회수";
+        else if (/uc부족|uc 부족|부족/.test(resultText.toLowerCase())) action = "제재";
 
         const pValue = parseNum(ci.pValue >= 0 ? row[ci.pValue] : 0);
         abuseRows.push({
@@ -304,13 +345,58 @@ function parseGSheetCSV(text, country, platform) {
     amount: findCol("金額","금액","amount"),
   };
 
-  // 마지막 컬럼을 result로
+  // 마지막 컬럼을 result로 (한국 기준)
   let resultIdx = headers.length - 1;
   for (let c = headers.length - 1; c >= 0; c--) {
     if (headers[c] && headers[c].trim()) { resultIdx = c; break; }
   }
 
+  // 일본 시트: Y열 인덱스 찾기
+  const isJapan = country === "일본";
+  // Y열 = 알파벳 Y = 24번째 열 (0-based: 24)
+  // 헤더에서 Y열에 해당하는 인덱스 찾기 (코멘트 히스토리 열)
+  let japanCommentIdx = 24; // 기본값 Y열
+  // 헤더에서 코멘트/comment/対応 관련 열 찾기
+  for (let c = 0; c < headers.length; c++) {
+    if (/コメント|comment|対応内容|履歴|history/i.test(headers[c]||"")) {
+      japanCommentIdx = c; break;
+    }
+  }
+
   const get = (row, idx) => (idx >= 0 && idx < row.length) ? (row[idx]||"").trim() : "";
+
+  // 상태 판단 함수
+  const classifyStatus = (row) => {
+    if (isJapan) {
+      // 일본: Y열(japanCommentIdx) 마지막 줄 코멘트 판단
+      const commentCell = get(row, japanCommentIdx);
+      // 마지막 줄 추출 (줄바꿈으로 분리)
+      const lines = commentCell.split(/
+|
+/).map(l=>l.trim()).filter(Boolean);
+      const lastLine = lines[lines.length - 1] || "";
+      const allText = commentCell; // 전체 텍스트도 참고
+
+      // 복구완료: 回収完了, 解除完了, 対応完了, 回収いたしました 등
+      if (/回収完了|解除完了|回収いたしました|UCの回収|回収を行|案内済み|対応完了|チャージ完了|복구완료|회수완료/.test(lastLine)) return "복구완료";
+      if (/回収完了|解除完了|回収いたしました|UCの回収|回収を行|案内済み|対応完了/.test(allText) && !/ヒアリング中|希望日/.test(lastLine)) return "복구완료";
+
+      // 재제재: BANいたしました, BAN処理, 期限が過ぎたためBAN 등
+      if (/BANいたしました|BAN処理|期限が過ぎたためBAN|再度BAN|停止いたしました|BANしました/.test(lastLine)) return "재제재";
+      if (/BANいたしました|BAN処理いたしました|期限が過ぎたためBAN/.test(allText) && !/案内/.test(lastLine)) return "재제재";
+
+      // 처리중: ヒアリング, 希望日, 빈칸 등
+      return "처리중";
+    } else {
+      // 한국: 마지막 열 텍스트 판단
+      const resultText = get(row, resultIdx);
+      if (!resultText || resultText === "-") return "처리중";
+      if (/회수|해제|복구|완료|정상화|재충전|回収|解除|回収完了/.test(resultText)) return "복구완료";
+      if (/제재|정지|ban|밴|BAN|않음|미결제/.test(resultText)) return "재제재";
+      return "처리중";
+    }
+  };
+
   const results = [];
 
   for (let i = headerIdx + 1; i < allRows.length; i++) {
@@ -319,11 +405,8 @@ function parseGSheetCSV(text, country, platform) {
     const openid = get(row, ci.openid);
     if (!openid) continue;
 
-    const resultText = get(row, resultIdx);
-    let status = "처리중";
-    if (/회수|해제|복구|완료|정상화|재충전|再チャージ|回収|解除/.test(resultText)) status = "복구완료";
-    else if (/제재|정지|ban|밴|再制裁|BAN|않음|미결제|なし|하지.*않/.test(resultText)) status = "재제재";
-    else if (resultText && resultText !== "-" && resultText.length > 0) status = "복구완료";
+    const resultText = isJapan ? get(row, japanCommentIdx) : get(row, resultIdx);
+    const status = classifyStatus(row);
 
     const dateRaw = get(row, ci.date);
     const date = parseDate(dateRaw) || dateRaw.slice(0,10) || "";
@@ -499,24 +582,35 @@ export default function App() {
     return Math.abs(amount) * rate;
   }, [exchangeRates]);
 
-  // ── Google Sheets OpenID → 최신 상태 맵 (전체) ──
+  // ── Google Sheets OpenID → 최신 상태 맵 (국가별 분리 매칭) ──
   const sheetOidMap = useMemo(() => {
     const map = {};
     [...responseData].sort((a,b)=>a.date.localeCompare(b.date)).forEach(d => {
       if (!d.openid) return;
-      if (!map[d.openid]) map[d.openid] = { status: d.status, lastDate: d.date, country: d.country, platform: d.platform };
-      if (d.date >= map[d.openid].lastDate) {
-        map[d.openid].status = d.status;
-        map[d.openid].lastDate = d.date;
+      const key = d.openid;
+      if (!map[key]) map[key] = { status: d.status, lastDate: d.date, country: d.country, platform: d.platform };
+      if (d.date >= map[key].lastDate) {
+        map[key].status = d.status;
+        map[key].lastDate = d.date;
+        map[key].country = d.country;
+        map[key].platform = d.platform;
       }
     });
     return map;
   }, [responseData]);
 
+  // 국가별 매칭: 한국 OpenID → 한국 시트만, 일본 → 일본 시트만
+  const getSheetStatus = useCallback((openid, country) => {
+    const allMatches = responseData.filter(d => d.openid === openid && d.country === country);
+    if (allMatches.length === 0) return null;
+    const latest = allMatches.sort((a,b)=>b.date.localeCompare(a.date))[0];
+    return latest;
+  }, [responseData]);
+
   // ── 핵심 통계 ──
   const stats = useMemo(() => {
-    // 총 주문건수 (UC보유정보 시트 전체 행수)
-    const totalOrders = filtered.length;
+    // 총 주문건수 (UC보유정보 시트 건수만)
+    const totalOrders = filtered.filter(d=>d.type==="UC보유정보").length;
 
     // ★ 유니크 OpenID (연도/세그먼트 필터 적용된 행에서 중복 제거)
     const uniqueOids = [...new Set(filtered.map(d=>d.openid).filter(Boolean))];
@@ -917,30 +1011,22 @@ ${JSON.stringify(ctx,null,2)}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
               <div style={{fontSize:13,color:"#4a6fa5",fontWeight:600}}>연도별 현황 테이블</div>
               <button onClick={()=>{
-                // 엑셀 다운로드
                 const rows = yearlyChart.map(row => {
-                  const keys = ["Google·한국","Google·일본","iOS·한국","iOS·일본","기타"];
-                  const total = keys.reduce((s,k)=>s+(row[k]||0),0);
-                  // 복구율/재제재율 계산
-                  const oids = allOrderRows.filter(d=>d.year===row.year).map(d=>d.openid).filter(Boolean);
-                  const uniqueOids = [...new Set(oids)];
-                  let recovered=0,resanctioned=0;
-                  uniqueOids.forEach(oid=>{
-                    const s=sheetOidMap[oid];
-                    if(!s) return;
-                    if(s.status==="복구완료") recovered++;
-                    if(s.status==="재제재") resanctioned++;
-                  });
-                  const krw = allOrderRows.filter(d=>d.year===row.year&&d.country==="한국").reduce((s,d)=>s+toKRW(d.amount||0,d.currency),0);
-                  const jpy = allOrderRows.filter(d=>d.year===row.year&&d.country==="일본").reduce((s,d)=>s+toKRW(d.amount||0,d.currency),0);
+                  // 세그먼트별 복구/재제재 계산
+                  const getSegStats = (platform, country) => {
+                    const oids = [...new Set(allOrderRows.filter(d=>d.year===row.year&&d.platform===platform&&d.country===country).map(d=>d.openid).filter(Boolean))];
+                    let rec=0,res=0;
+                    oids.forEach(oid=>{ const sv=sheetOidMap[oid]; if(!sv) return; if(sv.status==="복구완료") rec++; if(sv.status==="재제재") res++; });
+                    return { orders: row[`${platform==="Google"?"Google":"iOS"}·${country}`]||0, rec, res, rate: oids.length?Math.round(rec/oids.length*100):0 };
+                  };
+                  const krAos=getSegStats("Google","한국"), jpAos=getSegStats("Google","일본");
+                  const krIos=getSegStats("iOS","한국"), jpIos=getSegStats("iOS","일본");
                   return {
                     "연도": row.year+"년",
-                    "Google·한국": row["Google·한국"]||0, "Google·일본": row["Google·일본"]||0,
-                    "iOS·한국": row["iOS·한국"]||0, "iOS·일본": row["iOS·일본"]||0,
-                    "기타": row["기타"]||0, "합계": total,
-                    "복구수": recovered, "복구율": uniqueOids.length?`${Math.round(recovered/uniqueOids.length*100)}%`:"0%",
-                    "재제재수": resanctioned, "재제재율": uniqueOids.length?`${Math.round(resanctioned/uniqueOids.length*100)}%`:"0%",
-                    "한국환불금액(KRW)": Math.round(krw), "일본환불금액(KRW환산)": Math.round(jpy),
+                    "한국AOS_주문": krAos.orders, "한국AOS_복구수": krAos.rec, "한국AOS_복구율": krAos.rate+"%",
+                    "일본AOS_주문": jpAos.orders, "일본AOS_복구수": jpAos.rec, "일본AOS_복구율": jpAos.rate+"%",
+                    "한국iOS_주문": krIos.orders, "한국iOS_복구수": krIos.rec, "한국iOS_복구율": krIos.rate+"%",
+                    "일본iOS_주문": jpIos.orders, "일본iOS_복구수": jpIos.rec, "일본iOS_복구율": jpIos.rate+"%",
                   };
                 });
                 const ws = XLSX.utils.json_to_sheet(rows);
@@ -953,42 +1039,80 @@ ${JSON.stringify(ctx,null,2)}
             </div>
             <div style={{overflowX:"auto"}}>
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-                <thead><tr style={{borderBottom:"1px solid #1e3a5f",background:"#060d18"}}>
-                  {["연도","한국(Google)","일본(Google)","한국(iOS)","일본(iOS)","기타","합계","복구수","복구율","재제재수","재제재율"].map(h=>(
-                    <th key={h} style={{padding:"8px 10px",textAlign:"left",color:"#2d4a6e",fontWeight:600,whiteSpace:"nowrap"}}>{h}</th>
-                  ))}
-                </tr></thead>
+                <thead>
+                  {/* 그룹 헤더 */}
+                  <tr style={{background:"#060d18"}}>
+                    <th rowSpan={2} style={{padding:"8px 10px",textAlign:"left",color:"#2d4a6e",fontWeight:600,whiteSpace:"nowrap",borderBottom:"1px solid #1e3a5f"}}>연도</th>
+                    <th colSpan={3} style={{padding:"8px 10px",textAlign:"center",color:"#3b82f6",borderBottom:"2px solid #3b82f644",whiteSpace:"nowrap"}}>🇰🇷 한국 AOS</th>
+                    <th colSpan={3} style={{padding:"8px 10px",textAlign:"center",color:"#06b6d4",borderBottom:"2px solid #06b6d444",whiteSpace:"nowrap",borderLeft:"1px solid #1e3a5f"}}>🇯🇵 일본 AOS</th>
+                    <th colSpan={3} style={{padding:"8px 10px",textAlign:"center",color:"#a855f7",borderBottom:"2px solid #a855f744",whiteSpace:"nowrap",borderLeft:"1px solid #1e3a5f"}}>🇰🇷 한국 iOS</th>
+                    <th colSpan={3} style={{padding:"8px 10px",textAlign:"center",color:"#ec4899",borderBottom:"2px solid #ec489944",whiteSpace:"nowrap",borderLeft:"1px solid #1e3a5f"}}>🇯🇵 일본 iOS</th>
+                  </tr>
+                  <tr style={{background:"#060d18",borderBottom:"1px solid #1e3a5f"}}>
+                    {[["#3b82f6","#3b82f6","#3b82f6"],["#06b6d4","#06b6d4","#06b6d4"],["#a855f7","#a855f7","#a855f7"],["#ec4899","#ec4899","#ec4899"]].map((cols,gi)=>
+                      ["주문건수","복구수","복구율"].map((h,hi)=>(
+                        <th key={`${gi}-${hi}`} style={{padding:"6px 10px",textAlign:"center",color:cols[hi],fontWeight:600,whiteSpace:"nowrap",borderLeft:hi===0&&gi>0?"1px solid #1e3a5f":"none"}}>{h}</th>
+                      ))
+                    )}
+                  </tr>
+                </thead>
                 <tbody>
                   {yearlyChart.map((row,i)=>{
-                    const keys = ["Google·한국","Google·일본","iOS·한국","iOS·일본","기타"];
-                    const total = keys.reduce((s,k)=>s+(row[k]||0),0);
-                    const oids = allOrderRows.filter(d=>d.year===row.year).map(d=>d.openid).filter(Boolean);
-                    const uniqueOids = [...new Set(oids)];
-                    let recovered=0,resanctioned=0;
-                    uniqueOids.forEach(oid=>{
-                      const sv=sheetOidMap[oid];
-                      if(!sv) return;
-                      if(sv.status==="복구완료") recovered++;
-                      if(sv.status==="재제재") resanctioned++;
-                    });
-                    const recRate = uniqueOids.length?Math.round(recovered/uniqueOids.length*100):0;
-                    const resRate = uniqueOids.length?Math.round(resanctioned/uniqueOids.length*100):0;
+                    const getSegStats = (platform, country) => {
+                      const oids = [...new Set(allOrderRows.filter(d=>d.year===row.year&&d.platform===platform&&d.country===country).map(d=>d.openid).filter(Boolean))];
+                      let rec=0,res=0;
+                      oids.forEach(oid=>{ const sv=sheetOidMap[oid]; if(!sv) return; if(sv.status==="복구완료") rec++; if(sv.status==="재제재") res++; });
+                      const orders = row[`${platform==="Google"?"Google":"iOS"}·${country}`]||0;
+                      const rate = oids.length?Math.round(rec/oids.length*100):0;
+                      return { orders, rec, rate };
+                    };
+                    const krAos=getSegStats("Google","한국"), jpAos=getSegStats("Google","일본");
+                    const krIos=getSegStats("iOS","한국"), jpIos=getSegStats("iOS","일본");
+                    const segs = [
+                      {s:krAos, c:"#3b82f6"}, {s:jpAos, c:"#06b6d4"},
+                      {s:krIos, c:"#a855f7"}, {s:jpIos, c:"#ec4899"}
+                    ];
                     return (
-                      <tr key={i} style={{borderBottom:"1px solid #0a1220",background:yearFilter===row.year?"#0a1220":"transparent"}}>
-                        <td style={{padding:"8px 10px",fontWeight:700,color:"#e8f4ff"}}>{row.year}년</td>
-                        <td style={{padding:"8px 10px",color:"#3b82f6"}}>{fmt(row["Google·한국"]||0)}</td>
-                        <td style={{padding:"8px 10px",color:"#06b6d4"}}>{fmt(row["Google·일본"]||0)}</td>
-                        <td style={{padding:"8px 10px",color:"#a855f7"}}>{fmt(row["iOS·한국"]||0)}</td>
-                        <td style={{padding:"8px 10px",color:"#ec4899"}}>{fmt(row["iOS·일본"]||0)}</td>
-                        <td style={{padding:"8px 10px",color:"#6366f1"}}>{fmt(row["기타"]||0)}</td>
-                        <td style={{padding:"8px 10px",fontWeight:700,color:"#c8d8f0"}}>{fmt(total)}</td>
-                        <td style={{padding:"8px 10px",color:"#22c55e",fontWeight:700}}>{fmt(recovered)}</td>
-                        <td style={{padding:"8px 10px",color:"#22c55e"}}>{recRate}%</td>
-                        <td style={{padding:"8px 10px",color:"#ef4444",fontWeight:700}}>{fmt(resanctioned)}</td>
-                        <td style={{padding:"8px 10px",color:"#ef4444"}}>{resRate}%</td>
+                      <tr key={i} style={{borderBottom:"1px solid #0a1220",background:yearFilter===row.year?"#0a1528":"transparent"}}>
+                        <td style={{padding:"8px 10px",fontWeight:700,color:"#e8f4ff",whiteSpace:"nowrap"}}>{row.year}년</td>
+                        {segs.map(({s,c},si)=>(
+                          <>
+                            <td key={`${si}-o`} style={{padding:"7px 10px",color:c,textAlign:"center",borderLeft:si>0?"1px solid #0a1220":"none"}}>{fmt(s.orders)}</td>
+                            <td key={`${si}-r`} style={{padding:"7px 10px",color:"#22c55e",textAlign:"center",fontWeight:700}}>{fmt(s.rec)}</td>
+                            <td key={`${si}-p`} style={{padding:"7px 10px",color:"#22c55e",textAlign:"center"}}>{s.rate}%</td>
+                          </>
+                        ))}
                       </tr>
                     );
                   })}
+                  {/* 합계 행 */}
+                  {(()=>{
+                    const segs2 = [
+                      {platform:"Google",country:"한국",c:"#3b82f6"},
+                      {platform:"Google",country:"일본",c:"#06b6d4"},
+                      {platform:"iOS",country:"한국",c:"#a855f7"},
+                      {platform:"iOS",country:"일본",c:"#ec4899"},
+                    ];
+                    return (
+                      <tr style={{borderTop:"2px solid #1e3a5f",background:"#0a1528",fontWeight:700}}>
+                        <td style={{padding:"8px 10px",color:"#e8f4ff"}}>합계</td>
+                        {segs2.map(({platform,country,c},si)=>{
+                          const oids=[...new Set(allOrderRows.filter(d=>d.platform===platform&&d.country===country).map(d=>d.openid).filter(Boolean))];
+                          let rec=0;
+                          oids.forEach(oid=>{ const sv=sheetOidMap[oid]; if(sv?.status==="복구완료") rec++; });
+                          const orders = allOrderRows.filter(d=>d.platform===platform&&d.country===country).length;
+                          const rate = oids.length?Math.round(rec/oids.length*100):0;
+                          return (
+                            <>
+                              <td key={`t${si}-o`} style={{padding:"7px 10px",color:c,textAlign:"center",borderLeft:si>0?"1px solid #0a1220":"none"}}>{fmt(orders)}</td>
+                              <td key={`t${si}-r`} style={{padding:"7px 10px",color:"#22c55e",textAlign:"center"}}>{fmt(rec)}</td>
+                              <td key={`t${si}-p`} style={{padding:"7px 10px",color:"#22c55e",textAlign:"center"}}>{rate}%</td>
+                            </>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })()}
                 </tbody>
               </table>
             </div>
@@ -1085,75 +1209,75 @@ ${JSON.stringify(ctx,null,2)}
             <Card icon="⏳" label="처리중" value={fmt(stats.respProcessing)} sub={`${stats.totalResp?Math.round(stats.respProcessing/stats.totalResp*100):0}%`} color="#f59e0b"/>
           </div>
 
-          {/* 상태별 탭 + OpenID 목록 */}
-          <div style={{background:"#0d1b2e",borderRadius:14,padding:18,border:"1px solid #1e3a5f",marginBottom:12}}>
-            <div style={{display:"flex",gap:8,marginBottom:14}}>
-              {[["전체","#3b82f6"],["복구완료","#22c55e"],["재제재","#ef4444"],["처리중","#f59e0b"]].map(([s,c])=>{
-                const cnt = s==="전체" ? Object.keys(sheetOidMap).filter(oid=>{
-                  const v=sheetOidMap[oid];
-                  if(yearFilter!=="전체"&&v.lastDate?.slice(0,4)!==yearFilter) return false;
-                  if(segFilter!=="전체"&&getSeg(v.platform,v.country)!==segFilter) return false;
-                  return true;
-                }).length : s==="복구완료" ? stats.respRecovered : s==="재제재" ? stats.respResanctioned : stats.respProcessing;
-                return (
-                  <button key={s} onClick={()=>setCsStatusTab(s)}
-                    style={{padding:"8px 18px",borderRadius:10,border:`2px solid ${csStatusTab===s?c:"#1e3a5f"}`,
-                      background:csStatusTab===s?c+"22":"transparent",color:csStatusTab===s?c:"#4a6fa5",
-                      fontWeight:700,fontSize:12,cursor:"pointer"}}>
-                    {s} ({fmt(cnt)})
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* OpenID 목록 테이블 */}
-            {(() => {
-              const oids = Object.entries(sheetOidMap).filter(([oid,v]) => {
-                if(yearFilter!=="전체"&&v.lastDate?.slice(0,4)!==yearFilter) return false;
-                if(segFilter!=="전체"&&getSeg(v.platform,v.country)!==segFilter) return false;
-                if(csStatusTab!=="전체"&&v.status!==csStatusTab) return false;
-                return true;
-              });
+          {/* 상태별 탭 버튼 */}
+          <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+            {[["복구완료","#22c55e"],["재제재","#ef4444"],["처리중","#f59e0b"]].map(([s,c])=>{
+              const cnt = s==="복구완료" ? stats.respRecovered : s==="재제재" ? stats.respResanctioned : stats.respProcessing;
               return (
-                <div>
-                  <div style={{fontSize:11,color:"#2d4a6e",marginBottom:8}}>
-                    총 {fmt(oids.length)}명 표시중
-                    {csStatusTab==="처리중"&&<span style={{color:"#f59e0b",marginLeft:8}}>⚠️ 아직 처리되지 않은 유저</span>}
+                <button key={s} onClick={()=>setCsStatusTab(csStatusTab===s?"":s)}
+                  style={{padding:"10px 22px",borderRadius:10,border:`2px solid ${csStatusTab===s?c:"#1e3a5f"}`,
+                    background:csStatusTab===s?c+"22":"#0d1b2e",color:csStatusTab===s?c:"#4a6fa5",
+                    fontWeight:700,fontSize:12,cursor:"pointer",transition:"all 0.2s"}}>
+                  {s==="복구완료"?"✅":s==="재제재"?"🚫":"⏳"} {s} ({fmt(cnt)})
+                </button>
+              );
+            })}
+          </div>
+
+          {/* 탭 클릭시 OpenID 목록 표시 */}
+          {csStatusTab && (()=>{
+            const c = csStatusTab==="복구완료"?"#22c55e":csStatusTab==="재제재"?"#ef4444":"#f59e0b";
+            const oids = Object.entries(sheetOidMap).filter(([oid,v])=>{
+              if(yearFilter!=="전체"&&v.lastDate?.slice(0,4)!==yearFilter) return false;
+              if(segFilter!=="전체"&&getSeg(v.platform,v.country)!==segFilter) return false;
+              return v.status===csStatusTab;
+            });
+            return (
+              <div style={{background:"#0d1b2e",borderRadius:14,padding:18,border:`1px solid ${c}44`,marginBottom:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                  <div style={{fontSize:13,fontWeight:700,color:c}}>
+                    {csStatusTab==="복구완료"?"✅":csStatusTab==="재제재"?"🚫":"⏳"} {csStatusTab} 유저 목록
+                    <span style={{fontSize:11,color:"#4a6fa5",marginLeft:8}}>총 {fmt(oids.length)}명</span>
+                    {csStatusTab==="처리중"&&<span style={{fontSize:11,color:"#f59e0b",marginLeft:8}}>⚠️ 아직 처리되지 않은 유저</span>}
                   </div>
-                  <div style={{overflowX:"auto",maxHeight:400,overflowY:"auto"}}>
-                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-                      <thead style={{position:"sticky",top:0,background:"#060d18"}}>
-                        <tr style={{borderBottom:"1px solid #1e3a5f"}}>
-                          {["#","OpenID","상태","플랫폼","국가","최종처리일"].map(h=>(
-                            <th key={h} style={{padding:"8px 10px",textAlign:"left",color:"#2d4a6e",fontWeight:600}}>{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {oids.map(([oid,v],i)=>(
-                          <tr key={oid} style={{borderBottom:"1px solid #0a1220",cursor:"pointer"}}
+                  <button onClick={()=>setCsStatusTab("")} style={{background:"none",border:"none",color:"#4a6fa5",cursor:"pointer",fontSize:18}}>✕</button>
+                </div>
+                <div style={{overflowX:"auto",maxHeight:420,overflowY:"auto"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                    <thead style={{position:"sticky",top:0,background:"#060d18",zIndex:1}}>
+                      <tr style={{borderBottom:"1px solid #1e3a5f"}}>
+                        {["#","OpenID","플랫폼","국가","최종처리일","악용횟수","누적UC","현재UC"].map(h=>(
+                          <th key={h} style={{padding:"8px 10px",textAlign:"left",color:"#2d4a6e",fontWeight:600,whiteSpace:"nowrap"}}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {oids.map(([oid,v],i)=>{
+                        const abuse = allAbuseMap[oid];
+                        const oidInfo = allOidInfo[oid] || {};
+                        return (
+                          <tr key={oid}
+                            style={{borderBottom:"1px solid #0a1220",cursor:"pointer",background:"transparent"}}
+                            onMouseEnter={e=>e.currentTarget.style.background="#0a1528"}
+                            onMouseLeave={e=>e.currentTarget.style.background="transparent"}
                             onClick={()=>{ setSearchQ(oid); setTab("유저 조회"); setTimeout(()=>doSearch(),100); }}>
                             <td style={{padding:"7px 10px",color:"#2d4a6e"}}>{i+1}</td>
-                            <td style={{padding:"7px 10px",color:"#c8d8f0",fontFamily:"monospace"}}>{oid}</td>
-                            <td style={{padding:"7px 10px"}}>
-                              <span style={{padding:"2px 8px",borderRadius:4,fontSize:10,
-                                background:(STATUS_COLORS[v.status]||"#4a6fa5")+"22",
-                                color:STATUS_COLORS[v.status]||"#4a6fa5",fontWeight:700}}>
-                                {v.status}
-                              </span>
-                            </td>
+                            <td style={{padding:"7px 10px",color:"#c8d8f0",fontFamily:"monospace",fontSize:10}}>{oid}</td>
                             <td style={{padding:"7px 10px",color:"#4a6fa5"}}>{v.platform}</td>
                             <td style={{padding:"7px 10px",color:"#4a6fa5"}}>{v.country}</td>
-                            <td style={{padding:"7px 10px",color:"#2d4a6e"}}>{v.lastDate}</td>
+                            <td style={{padding:"7px 10px",color:"#2d4a6e",whiteSpace:"nowrap"}}>{v.lastDate}</td>
+                            <td style={{padding:"7px 10px",color:"#f59e0b",textAlign:"center"}}>{fmt(oidInfo.abuseCount||0)}</td>
+                            <td style={{padding:"7px 10px",color:"#3b82f6",textAlign:"right"}}>{fmt(oidInfo.totalUC||0)}</td>
+                            <td style={{padding:"7px 10px",color:"#22c55e",textAlign:"right"}}>{fmt(oidInfo.currentUC||0)}</td>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
-              );
-            })()}
-          </div>
+              </div>
+            );
+          })()}
 
           {/* 차트 */}
           <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12}}>
