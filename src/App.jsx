@@ -129,10 +129,13 @@ function parseExcelFile(wb) {
                          (detectPlatform(sName) || "Google");
         const dateRaw = ci.time >= 0 ? row[ci.time] : "";
         const date = parseDate(String(dateRaw||"")) || "";
+        const amountRaw = fc("charged amount","item price","금액","payamt","amount");
+        const amount = Math.abs(parseNum(amountRaw >= 0 ? row[amountRaw] : 0));
         orderRows.push({
           orderNo, openid, currency, country, platform,
           date, year: date.slice(0,4), month: date.slice(0,7),
           ucBalance: parseNum(ci.ucBalance >= 0 ? row[ci.ucBalance] : 0),
+          amount,
           segment: getSeg(platform, country),
         });
         parsed++;
@@ -189,6 +192,38 @@ function parseExcelFile(wb) {
         parsed++;
       }
       log.push({ sheet: sName, type: "악용자", count: parsed });
+    }
+    // ━━━ 시트: iOS 환불악용 유저 리스트 (vopenid, payamt, ordertime) ━━━
+    else if (sLower.includes("ios") || sLower.includes("apple") || sLower.includes("앱스토어") ||
+             sLower.includes("환불악용") || sLower.includes("ios 환불")) {
+      const ci = {
+        openid: fc("vopenid","오픈 아이디","openid","open id"),
+        orderNo: fc("orderid","externalorderid","주문번호","order"),
+        currency: fc("currencytype","화폐","currency","통화"),
+        amount: fc("payamt","charged amount","금액","amount","item price"),
+        time: fc("ordertime","orderdate","시간","date","날짜"),
+      };
+      let parsed = 0;
+      for (let i = headerIdx + 1; i < raw.length; i++) {
+        const row = raw[i];
+        const openid = String(row[ci.openid] ?? "").trim();
+        const orderNo = String(row[ci.orderNo] ?? "").trim();
+        if (!openid && !orderNo) continue;
+        const currency = String(row[ci.currency] ?? "KRW").trim().toUpperCase() || "KRW";
+        const country = getCountry(currency);
+        const platform = "iOS";
+        const dateRaw = ci.time >= 0 ? row[ci.time] : "";
+        const date = parseDate(String(dateRaw||"")) || "";
+        const amount = Math.abs(parseNum(ci.amount >= 0 ? row[ci.amount] : 0));
+        orderRows.push({
+          orderNo, openid, currency, country, platform,
+          date, year: date.slice(0,4), month: date.slice(0,7),
+          amount, ucBalance: 0,
+          segment: getSeg(platform, country),
+        });
+        parsed++;
+      }
+      log.push({ sheet: sName, type: "iOS주문", count: parsed });
     }
     // 계산하기, Sheet1 등 기타 시트는 무시
   });
@@ -325,7 +360,9 @@ const Card = ({ icon, label, value, sub, color="#3b82f6" }) => (
 export default function App() {
   const [tab, setTab] = useState("마켓 환불 현황");
   const [yearFilter, setYearFilter] = useState("전체");
+  const [monthFilter, setMonthFilter] = useState("전체");
   const [segFilter, setSegFilter] = useState("전체");
+  const [csStatusTab, setCsStatusTab] = useState("전체");
 
   // 엑셀 데이터 (파일 2개: Google/iOS 각각)
   const [files, setFiles] = useState([]); // [{name, orderRows, abuseRows, oidInfo, log}]
@@ -350,6 +387,10 @@ export default function App() {
   const [searchQ, setSearchQ] = useState("");
   const [searchRes, setSearchRes] = useState(null);
 
+  // 실시간 환율 (KRW 기준)
+  const [exchangeRates, setExchangeRates] = useState({ KRW:1, JPY:9, USD:1350, EUR:1470, TRY:42, SAR:360, VND:0.054, GBP:1710, CNY:186 });
+  const [ratesLoaded, setRatesLoaded] = useState(false);
+
   // 토스트 알림
   const [toast, setToast] = useState(null);
   const showToast = (msg, color="#22c55e") => {
@@ -369,7 +410,7 @@ export default function App() {
         const existing = prev.findIndex(f => f.name === file.name);
         const entry = { name: file.name, ...parsed };
         if (existing >= 0) { const n=[...prev]; n[existing]=entry; return n; }
-        return [...prev.slice(-1), entry]; // 최대 2개 유지
+        return [...prev, entry];
       });
       setUploadLog(parsed.log);
       const orderCount = parsed.orderRows.length;
@@ -432,17 +473,31 @@ export default function App() {
     return ["전체", ...ys];
   }, [allOrderRows]);
 
+  const months = useMemo(() => {
+    const src = yearFilter === "전체" ? allOrderRows : allOrderRows.filter(d=>d.year===yearFilter);
+    const ms = [...new Set(src.map(d=>d.month))].filter(Boolean).sort();
+    return ["전체", ...ms];
+  }, [allOrderRows, yearFilter]);
+
   const filtered = useMemo(() => allOrderRows.filter(d => {
     if (yearFilter!=="전체" && d.year!==yearFilter) return false;
+    if (monthFilter!=="전체" && d.month!==monthFilter) return false;
     if (segFilter!=="전체" && d.segment!==segFilter) return false;
     return true;
-  }), [allOrderRows, yearFilter, segFilter]);
+  }), [allOrderRows, yearFilter, monthFilter, segFilter]);
 
   const filteredResp = useMemo(() => responseData.filter(d => {
     if (yearFilter!=="전체" && d.year!==yearFilter) return false;
+    if (monthFilter!=="전체" && d.month!==monthFilter) return false;
     if (segFilter!=="전체" && d.segment!==segFilter) return false;
     return true;
-  }), [responseData, yearFilter, segFilter]);
+  }), [responseData, yearFilter, monthFilter, segFilter]);
+
+  // 환율 변환 함수
+  const toKRW = useCallback((amount, currency) => {
+    const rate = exchangeRates[String(currency||"KRW").trim().toUpperCase()] || 1;
+    return Math.abs(amount) * rate;
+  }, [exchangeRates]);
 
   // ── Google Sheets OpenID → 최신 상태 맵 (전체) ──
   const sheetOidMap = useMemo(() => {
@@ -514,17 +569,23 @@ export default function App() {
       responseData.forEach(d => { segStats[d.segment]=(segStats[d.segment]||0)+1; });
     }
 
+    // 환불 금액 (통화별)
+    const amountByCountry = { 한국:0, 일본:0, 기타:0 };
+    filtered.forEach(d => {
+      const krw = Math.abs(d.amount||0);
+      if (d.country === "한국") amountByCountry["한국"] += krw;
+      else if (d.country === "일본") amountByCountry["일본"] += krw;
+      else amountByCountry["기타"] += krw;
+    });
+
     return {
       totalOrders, uniqueUsers,
-      // 악용자 리스트 B열 유니크 기준, G열 집계
       totalAbuseUnique,
       recovered: excelRecovered,
       sanctioned: excelSanctioned,
-      excelBoth,
-      excelUnprocessed,
-      // Google Sheets 기준
+      excelBoth, excelUnprocessed,
       respRecovered, respResanctioned, respProcessing, totalResp,
-      segStats
+      segStats, amountByCountry,
     };
   }, [filtered, allAbuseRows, allAbuseMap, sheetOidMap, responseData, segFilter]);
 
@@ -615,6 +676,23 @@ ${JSON.stringify(ctx,null,2)}
 
   useEffect(()=>{ chatEndRef.current?.scrollIntoView({behavior:"smooth"}); },[chatMessages]);
 
+  // 실시간 환율 로드
+  useEffect(() => {
+    fetch("https://open.er-api.com/v6/latest/KRW")
+      .then(r => r.json())
+      .then(data => {
+        if (data.rates) {
+          const rates = { KRW: 1 };
+          Object.entries(data.rates).forEach(([cur, rate]) => {
+            rates[cur] = 1 / rate;
+          });
+          setExchangeRates(prev => ({...prev, ...rates}));
+          setRatesLoaded(true);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   // ── 유저 조회 ──
   // ── 유저 조회 ──
   const doSearch = () => {
@@ -641,12 +719,23 @@ ${JSON.stringify(ctx,null,2)}
     <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
       <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
         {years.map(y=>(
-          <button key={y} onClick={()=>setYearFilter(y)}
+          <button key={y} onClick={()=>{ setYearFilter(y); setMonthFilter("전체"); }}
             style={{padding:"4px 12px",borderRadius:20,border:`1px solid ${yearFilter===y?"#1d4ed8":"#1e3a5f"}`,fontSize:11,fontWeight:600,cursor:"pointer",background:yearFilter===y?"#1d4ed8":"#0d1b2e",color:yearFilter===y?"#fff":"#4a6fa5"}}>
             {y}
           </button>
         ))}
       </div>
+      {/* 월 필터 */}
+      {months.length > 2 && (
+        <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+          {months.map(m=>(
+            <button key={m} onClick={()=>setMonthFilter(m)}
+              style={{padding:"3px 10px",borderRadius:20,border:`1px solid ${monthFilter===m?"#0891b2":"#1e3a5f"}`,fontSize:10,fontWeight:600,cursor:"pointer",background:monthFilter===m?"#0891b2":"#0d1b2e",color:monthFilter===m?"#fff":"#4a6fa5"}}>
+              {m==="전체"?"전체월":m}
+            </button>
+          ))}
+        </div>
+      )}
       <select value={segFilter} onChange={e=>setSegFilter(e.target.value)}
         style={{padding:"5px 10px",borderRadius:8,border:"1px solid #1e3a5f",background:"#0d1b2e",color:"#c8d8f0",fontSize:11}}>
         <option>전체</option>
@@ -780,6 +869,8 @@ ${JSON.stringify(ctx,null,2)}
               sub={`${stats.totalAbuseUnique?Math.round(stats.recovered/stats.totalAbuseUnique*100):0}% (${fmt(stats.totalAbuseUnique)}명 중)`} color="#22d3ee"/>
             <Card icon="🚫" label="제재 처리" value={fmt(stats.sanctioned)}
               sub={`${stats.totalAbuseUnique?Math.round(stats.sanctioned/stats.totalAbuseUnique*100):0}% (${fmt(stats.totalAbuseUnique)}명 중)`} color="#ef4444"/>
+            <Card icon="💰" label="한국 환불금액" value={`₩${fmt(Math.round(stats.amountByCountry?.한국||0))}`} sub="KRW" color="#f59e0b"/>
+            <Card icon="💴" label="일본 환불금액" value={`¥${fmt(Math.round((stats.amountByCountry?.일본||0)))}`} sub="JPY→KRW환산" color="#06b6d4"/>
           </div>
 
           <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12,marginBottom:12}}>
@@ -823,25 +914,78 @@ ${JSON.stringify(ctx,null,2)}
         <FilterBar/>
         {!hasData ? <div style={{background:"#0d1b2e",borderRadius:14,padding:40,textAlign:"center",color:"#2d4a6e",fontSize:13}}>파일을 먼저 업로드해주세요.</div> : (<>
           <div style={{background:"#0d1b2e",borderRadius:14,padding:18,border:"1px solid #1e3a5f",marginBottom:12}}>
-            <div style={{fontSize:13,color:"#4a6fa5",fontWeight:600,marginBottom:14}}>연도별 현황 테이블</div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+              <div style={{fontSize:13,color:"#4a6fa5",fontWeight:600}}>연도별 현황 테이블</div>
+              <button onClick={()=>{
+                // 엑셀 다운로드
+                const rows = yearlyChart.map(row => {
+                  const keys = ["Google·한국","Google·일본","iOS·한국","iOS·일본","기타"];
+                  const total = keys.reduce((s,k)=>s+(row[k]||0),0);
+                  // 복구율/재제재율 계산
+                  const oids = allOrderRows.filter(d=>d.year===row.year).map(d=>d.openid).filter(Boolean);
+                  const uniqueOids = [...new Set(oids)];
+                  let recovered=0,resanctioned=0;
+                  uniqueOids.forEach(oid=>{
+                    const s=sheetOidMap[oid];
+                    if(!s) return;
+                    if(s.status==="복구완료") recovered++;
+                    if(s.status==="재제재") resanctioned++;
+                  });
+                  const krw = allOrderRows.filter(d=>d.year===row.year&&d.country==="한국").reduce((s,d)=>s+toKRW(d.amount||0,d.currency),0);
+                  const jpy = allOrderRows.filter(d=>d.year===row.year&&d.country==="일본").reduce((s,d)=>s+toKRW(d.amount||0,d.currency),0);
+                  return {
+                    "연도": row.year+"년",
+                    "Google·한국": row["Google·한국"]||0, "Google·일본": row["Google·일본"]||0,
+                    "iOS·한국": row["iOS·한국"]||0, "iOS·일본": row["iOS·일본"]||0,
+                    "기타": row["기타"]||0, "합계": total,
+                    "복구수": recovered, "복구율": uniqueOids.length?`${Math.round(recovered/uniqueOids.length*100)}%`:"0%",
+                    "재제재수": resanctioned, "재제재율": uniqueOids.length?`${Math.round(resanctioned/uniqueOids.length*100)}%`:"0%",
+                    "한국환불금액(KRW)": Math.round(krw), "일본환불금액(KRW환산)": Math.round(jpy),
+                  };
+                });
+                const ws = XLSX.utils.json_to_sheet(rows);
+                const wb2 = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb2, ws, "연도별분석");
+                XLSX.writeFile(wb2, `연도별분석_${new Date().toISOString().slice(0,10)}.xlsx`);
+              }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:"#16a34a",color:"#fff",cursor:"pointer",fontWeight:700,fontSize:12}}>
+                📥 엑셀 다운로드
+              </button>
+            </div>
             <div style={{overflowX:"auto"}}>
-              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                <thead><tr style={{borderBottom:"1px solid #1e3a5f"}}>
-                  {["연도","Google·한국","Google·일본","iOS·한국","iOS·일본","기타","합계"].map(h=>(
-                    <th key={h} style={{padding:"8px 10px",textAlign:"left",color:"#2d4a6e",fontWeight:600}}>{h}</th>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                <thead><tr style={{borderBottom:"1px solid #1e3a5f",background:"#060d18"}}>
+                  {["연도","한국(Google)","일본(Google)","한국(iOS)","일본(iOS)","기타","합계","복구수","복구율","재제재수","재제재율"].map(h=>(
+                    <th key={h} style={{padding:"8px 10px",textAlign:"left",color:"#2d4a6e",fontWeight:600,whiteSpace:"nowrap"}}>{h}</th>
                   ))}
                 </tr></thead>
                 <tbody>
                   {yearlyChart.map((row,i)=>{
                     const keys = ["Google·한국","Google·일본","iOS·한국","iOS·일본","기타"];
                     const total = keys.reduce((s,k)=>s+(row[k]||0),0);
+                    const oids = allOrderRows.filter(d=>d.year===row.year).map(d=>d.openid).filter(Boolean);
+                    const uniqueOids = [...new Set(oids)];
+                    let recovered=0,resanctioned=0;
+                    uniqueOids.forEach(oid=>{
+                      const sv=sheetOidMap[oid];
+                      if(!sv) return;
+                      if(sv.status==="복구완료") recovered++;
+                      if(sv.status==="재제재") resanctioned++;
+                    });
+                    const recRate = uniqueOids.length?Math.round(recovered/uniqueOids.length*100):0;
+                    const resRate = uniqueOids.length?Math.round(resanctioned/uniqueOids.length*100):0;
                     return (
                       <tr key={i} style={{borderBottom:"1px solid #0a1220",background:yearFilter===row.year?"#0a1220":"transparent"}}>
                         <td style={{padding:"8px 10px",fontWeight:700,color:"#e8f4ff"}}>{row.year}년</td>
-                        {keys.map(k=>(
-                          <td key={k} style={{padding:"8px 10px",color:SEG_COLORS[k.replace("·","_")]||"#4a6fa5"}}>{fmt(row[k]||0)}</td>
-                        ))}
+                        <td style={{padding:"8px 10px",color:"#3b82f6"}}>{fmt(row["Google·한국"]||0)}</td>
+                        <td style={{padding:"8px 10px",color:"#06b6d4"}}>{fmt(row["Google·일본"]||0)}</td>
+                        <td style={{padding:"8px 10px",color:"#a855f7"}}>{fmt(row["iOS·한국"]||0)}</td>
+                        <td style={{padding:"8px 10px",color:"#ec4899"}}>{fmt(row["iOS·일본"]||0)}</td>
+                        <td style={{padding:"8px 10px",color:"#6366f1"}}>{fmt(row["기타"]||0)}</td>
                         <td style={{padding:"8px 10px",fontWeight:700,color:"#c8d8f0"}}>{fmt(total)}</td>
+                        <td style={{padding:"8px 10px",color:"#22c55e",fontWeight:700}}>{fmt(recovered)}</td>
+                        <td style={{padding:"8px 10px",color:"#22c55e"}}>{recRate}%</td>
+                        <td style={{padding:"8px 10px",color:"#ef4444",fontWeight:700}}>{fmt(resanctioned)}</td>
+                        <td style={{padding:"8px 10px",color:"#ef4444"}}>{resRate}%</td>
                       </tr>
                     );
                   })}
@@ -924,7 +1068,7 @@ ${JSON.stringify(ctx,null,2)}
         )}
       </>)}
 
-      {/* ━━━ 대응 현황 ━━━ */}
+      {/* ━━━ CS대응현황 ━━━ */}
       {tab==="CS대응현황" && (<>
         <SheetBox/>
         <FilterBar/>
@@ -933,12 +1077,85 @@ ${JSON.stringify(ctx,null,2)}
             위 버튼으로 Google Sheets 데이터를 불러오세요.
           </div>
         ) : (<>
+          {/* 요약 카드 */}
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10,marginBottom:14}}>
             <Card icon="📋" label="총 대응건수" value={fmt(filteredResp.length)} sub="행 기준" color="#3b82f6"/>
             <Card icon="✅" label="복구 완료" value={fmt(stats.respRecovered)} sub={`${stats.totalResp?Math.round(stats.respRecovered/stats.totalResp*100):0}%`} color="#22c55e"/>
             <Card icon="🚫" label="재제재" value={fmt(stats.respResanctioned)} sub={`${stats.totalResp?Math.round(stats.respResanctioned/stats.totalResp*100):0}%`} color="#ef4444"/>
-
+            <Card icon="⏳" label="처리중" value={fmt(stats.respProcessing)} sub={`${stats.totalResp?Math.round(stats.respProcessing/stats.totalResp*100):0}%`} color="#f59e0b"/>
           </div>
+
+          {/* 상태별 탭 + OpenID 목록 */}
+          <div style={{background:"#0d1b2e",borderRadius:14,padding:18,border:"1px solid #1e3a5f",marginBottom:12}}>
+            <div style={{display:"flex",gap:8,marginBottom:14}}>
+              {[["전체","#3b82f6"],["복구완료","#22c55e"],["재제재","#ef4444"],["처리중","#f59e0b"]].map(([s,c])=>{
+                const cnt = s==="전체" ? Object.keys(sheetOidMap).filter(oid=>{
+                  const v=sheetOidMap[oid];
+                  if(yearFilter!=="전체"&&v.lastDate?.slice(0,4)!==yearFilter) return false;
+                  if(segFilter!=="전체"&&getSeg(v.platform,v.country)!==segFilter) return false;
+                  return true;
+                }).length : s==="복구완료" ? stats.respRecovered : s==="재제재" ? stats.respResanctioned : stats.respProcessing;
+                return (
+                  <button key={s} onClick={()=>setCsStatusTab(s)}
+                    style={{padding:"8px 18px",borderRadius:10,border:`2px solid ${csStatusTab===s?c:"#1e3a5f"}`,
+                      background:csStatusTab===s?c+"22":"transparent",color:csStatusTab===s?c:"#4a6fa5",
+                      fontWeight:700,fontSize:12,cursor:"pointer"}}>
+                    {s} ({fmt(cnt)})
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* OpenID 목록 테이블 */}
+            {(() => {
+              const oids = Object.entries(sheetOidMap).filter(([oid,v]) => {
+                if(yearFilter!=="전체"&&v.lastDate?.slice(0,4)!==yearFilter) return false;
+                if(segFilter!=="전체"&&getSeg(v.platform,v.country)!==segFilter) return false;
+                if(csStatusTab!=="전체"&&v.status!==csStatusTab) return false;
+                return true;
+              });
+              return (
+                <div>
+                  <div style={{fontSize:11,color:"#2d4a6e",marginBottom:8}}>
+                    총 {fmt(oids.length)}명 표시중
+                    {csStatusTab==="처리중"&&<span style={{color:"#f59e0b",marginLeft:8}}>⚠️ 아직 처리되지 않은 유저</span>}
+                  </div>
+                  <div style={{overflowX:"auto",maxHeight:400,overflowY:"auto"}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                      <thead style={{position:"sticky",top:0,background:"#060d18"}}>
+                        <tr style={{borderBottom:"1px solid #1e3a5f"}}>
+                          {["#","OpenID","상태","플랫폼","국가","최종처리일"].map(h=>(
+                            <th key={h} style={{padding:"8px 10px",textAlign:"left",color:"#2d4a6e",fontWeight:600}}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {oids.map(([oid,v],i)=>(
+                          <tr key={oid} style={{borderBottom:"1px solid #0a1220",cursor:"pointer"}}
+                            onClick={()=>{ setSearchQ(oid); setTab("유저 조회"); setTimeout(()=>doSearch(),100); }}>
+                            <td style={{padding:"7px 10px",color:"#2d4a6e"}}>{i+1}</td>
+                            <td style={{padding:"7px 10px",color:"#c8d8f0",fontFamily:"monospace"}}>{oid}</td>
+                            <td style={{padding:"7px 10px"}}>
+                              <span style={{padding:"2px 8px",borderRadius:4,fontSize:10,
+                                background:(STATUS_COLORS[v.status]||"#4a6fa5")+"22",
+                                color:STATUS_COLORS[v.status]||"#4a6fa5",fontWeight:700}}>
+                                {v.status}
+                              </span>
+                            </td>
+                            <td style={{padding:"7px 10px",color:"#4a6fa5"}}>{v.platform}</td>
+                            <td style={{padding:"7px 10px",color:"#4a6fa5"}}>{v.country}</td>
+                            <td style={{padding:"7px 10px",color:"#2d4a6e"}}>{v.lastDate}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* 차트 */}
           <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12}}>
             <div style={{background:"#0d1b2e",borderRadius:14,padding:18,border:"1px solid #1e3a5f"}}>
               <div style={{fontSize:13,color:"#4a6fa5",fontWeight:600,marginBottom:14}}>월별 대응현황 추이</div>
@@ -959,9 +1176,7 @@ ${JSON.stringify(ctx,null,2)}
               <ResponsiveContainer width="100%" height={160}>
                 <PieChart>
                   <Pie data={[
-                    {name:"복구완료",value:stats.respRecovered,color:"#22c55e"},
-                    {name:"재제재",value:stats.respResanctioned,color:"#ef4444"},
-                    {name:"처리중",value:stats.respProcessing,color:"#f59e0b"},
+                    {name:"복구완료",value:stats.respRecovered},{name:"재제재",value:stats.respResanctioned},{name:"처리중",value:stats.respProcessing},
                   ].filter(d=>d.value>0)} cx="50%" cy="50%" innerRadius={45} outerRadius={65} dataKey="value" paddingAngle={3}>
                     {[{color:"#22c55e"},{color:"#ef4444"},{color:"#f59e0b"}].map((e,i)=><Cell key={i} fill={e.color}/>)}
                   </Pie>
