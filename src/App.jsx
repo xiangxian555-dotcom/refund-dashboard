@@ -371,9 +371,7 @@ function parseGSheetCSV(text, country, platform) {
       // 일본: Y열(japanCommentIdx) 마지막 줄 코멘트 판단
       const commentCell = get(row, japanCommentIdx);
       // 마지막 줄 추출 (줄바꿈으로 분리)
-      const lines = commentCell.split(/
-|
-/).map(l=>l.trim()).filter(Boolean);
+      const lines = commentCell.split(/\n|\r/).map(l=>l.trim()).filter(Boolean);
       const lastLine = lines[lines.length - 1] || "";
       const allText = commentCell; // 전체 텍스트도 참고
 
