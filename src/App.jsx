@@ -76,6 +76,7 @@ function parseExcelFile(wb) {
   wb.SheetNames.forEach(sName => {
     const ws = wb.Sheets[sName];
     const raw = XLSX.utils.sheet_to_json(ws, { defval: "", header: 1 });
+    console.log("[시트감지]", sName, "행수:", raw?.length);
     if (!raw || raw.length < 2) return;
 
     const sLower = sName.toLowerCase();
@@ -83,10 +84,13 @@ function parseExcelFile(wb) {
     const fc = (...n) => findCol(headers, ...n);
 
     // ━━━ 시트1: 악용 대상자 UC 보유 정보 ━━━
-    if (sLower.includes("uc 보유") || sLower.includes("uc보유") || sLower.includes("보유 정보") ||
-        sLower.includes("보유정보") || sLower.includes("악용 대상자 uc") || sLower.includes("악용대상자uc") ||
-        sLower.includes("대상자 uc") || sLower.includes("대상자uc") || sLower.includes("uc 보유 정보") ||
-        (sLower.includes("대상자") && sLower.includes("보유")) || sLower.includes("악용 대상자 u")) {
+    const isUCSheet = sName === "악용 대상자 UC 보유 정보" ||
+      sLower.includes("uc 보유") || sLower.includes("uc보유") ||
+      sLower.includes("보유 정보") || sLower.includes("보유정보") ||
+      sLower.includes("악용 대상자 uc") || sLower.includes("악용대상자uc") ||
+      sLower.includes("대상자 uc") || sLower.includes("uc 보유 정보") ||
+      (sLower.includes("대상자") && sLower.includes("보유"));
+    if (isUCSheet) {
       const ci = {
         openid: fc("오픈 아이디","오픈아이디","openid","open id","open_id","오픈 id","오픈id"),
         orderNo: fc("주문번호","order number","order no","orderid"),
