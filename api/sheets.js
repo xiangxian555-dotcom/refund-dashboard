@@ -98,7 +98,8 @@ export default async function handler(req, res) {
         const response = await sheets.spreadsheets.values.get({
           spreadsheetId: SHEET_ID,
           range: tab.name,
-          valueRenderOption: "FORMATTED_VALUE", // 숫자도 문자열로 받아 정밀도 손실 방지
+          valueRenderOption: "UNFORMATTED_VALUE", // 숫자 원본값으로 받기
+          dateTimeRenderOption: "FORMATTED_STRING",
         });
 
         const rows = response.data.values || [];
@@ -208,12 +209,17 @@ export default async function handler(req, res) {
           // 전체 행 저장 (중복 제거 없음 — 히스토리 전체 보존)
           for (let i = headerIdx + 1; i < rows.length; i++) {
             const row = rows[i];
-            // OpenID: 구글 시트에서 큰 숫자가 부동소수점으로 손실될 수 있어서
-            // 원본 raw 값을 그대로 문자열로 사용
             const rawOid = row[ci.openid];
             if (!rawOid && rawOid !== 0) continue;
-            const openid = String(rawOid).trim().replace(/\.0+$/, "");
+            // 큰 숫자 정밀도 손실 방지: 숫자형이면 BigInt로 변환
+            let openid;
+            if (typeof rawOid === "number") {
+              openid = BigInt(Math.round(rawOid)).toString();
+            } else {
+              openid = String(rawOid).trim().replace(/\.0+$/, "");
+            }
             if (!openid) continue;
+            console.log("[일본OID변환]", "raw:", rawOid, "type:", typeof rawOid, "→", openid);
 
             const yText = String(row[yColIdx] || "").trim();
             const status = classifyJapan(yText);
