@@ -850,7 +850,7 @@ function Dashboard({ country, parsedData, onBack }) {
           </div>
         ):(<>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10,marginBottom:14}}>
-            <Card icon="📋" label="총 제재 대상" value={fmt(stats.totalAbuseUnique)} sub="악용자 리스트 기준" color="#3b82f6"/>
+            <Card icon="📋" label="총 대응건수" value={fmt(filteredResp.length)} sub="Google Sheets 기준" color="#3b82f6"/>
             <Card icon="✅" label="복구 완료" value={fmt(stats.respRecovered)} sub={`${stats.totalAbuseUnique?Math.round(stats.respRecovered/stats.totalAbuseUnique*100):0}%`} color="#22c55e"/>
             <Card icon="🚫" label="재제재" value={fmt(stats.respResanctioned)} sub={`${stats.totalAbuseUnique?Math.round(stats.respResanctioned/stats.totalAbuseUnique*100):0}%`} color="#ef4444"/>
           </div>
