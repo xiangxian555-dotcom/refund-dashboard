@@ -95,11 +95,12 @@ export default async function handler(req, res) {
 
     for (const tab of targetTabs) {
       try {
+        // 일본 시트는 FORMULA로 읽어야 큰 숫자 손실 방지
+        const renderOption = isJapan ? "FORMULA" : "FORMATTED_VALUE";
         const response = await sheets.spreadsheets.values.get({
           spreadsheetId: SHEET_ID,
           range: tab.name,
-          valueRenderOption: "UNFORMATTED_VALUE", // 숫자 원본값으로 받기
-          dateTimeRenderOption: "FORMATTED_STRING",
+          valueRenderOption: renderOption,
         });
 
         const rows = response.data.values || [];
@@ -211,15 +212,12 @@ export default async function handler(req, res) {
             const row = rows[i];
             const rawOid = row[ci.openid];
             if (!rawOid && rawOid !== 0) continue;
-            // 큰 숫자 정밀도 손실 방지: 숫자형이면 BigInt로 변환
-            let openid;
-            if (typeof rawOid === "number") {
-              openid = BigInt(Math.round(rawOid)).toString();
-            } else {
-              openid = String(rawOid).trim().replace(/\.0+$/, "");
-            }
+            // FORMULA 모드에서 숫자는 그대로 문자열로 변환
+            // 예: 13969492262913321 → "13969492262913321"
+            let openid = String(rawOid).trim().replace(/\.0+$/, "");
+            // 수식인 경우 (=로 시작) 처리
+            if (openid.startsWith("=")) openid = openid.replace(/^=/, "");
             if (!openid) continue;
-            console.log("[일본OID변환]", "raw:", rawOid, "type:", typeof rawOid, "→", openid);
 
             const yText = String(row[yColIdx] || "").trim();
             const status = classifyJapan(yText);
