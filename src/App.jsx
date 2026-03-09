@@ -818,10 +818,11 @@ function Dashboard({ country, parsedData, onBack }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {yearlyChart.map((row,i)=>{
-                    const yas=yearlyAbuseStats[row.year]||{sanctioned:0,recovered:0,resanctioned:0};
-                    return(
-                      <tr key={i}
+                  {yearlyChart.flatMap((row,i)=>{
+                    const yas=yearlyAbuseStats[row.year]||{sanctioned:0,recovered:0,resanctioned:0,recoveredAmount:0};
+                    const months = monthlyStats[row.year]||[];
+                    const mainRow = (
+                      <tr key={`yr-${i}`}
                         onClick={()=>setExpandedYear(expandedYear===row.year?null:row.year)}
                         style={{borderBottom:"1px solid #0a1220",cursor:"pointer",background:expandedYear===row.year?"#0a1e3a":"transparent"}}
                         onMouseEnter={e=>{ if(expandedYear!==row.year) e.currentTarget.style.background="#0a1528"; }}
@@ -837,44 +838,40 @@ function Dashboard({ country, parsedData, onBack }) {
                         <td style={{padding:"7px 10px",color:"#f59e0b",textAlign:"center",fontWeight:700}}>{fmt(yas.resanctioned)}</td>
                         <td style={{padding:"7px 10px",color:"#f59e0b",textAlign:"center"}}>{yas.sanctioned?Math.round(yas.resanctioned/yas.sanctioned*100):0}%</td>
                       </tr>
-                      {expandedYear===row.year&&(()=>{
-                        const months = monthlyStats[row.year]||[];
-                        return(
-                          <tr style={{background:"#060d18"}}>
-                            <td colSpan={8} style={{padding:0}}>
-                              <div style={{padding:"10px 20px",borderBottom:"1px solid #1e3a5f"}}>
-                                <div style={{fontSize:11,color:countryColor,fontWeight:700,marginBottom:8}}>📅 {row.year}년 월별 상세</div>
-                                <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}>
-                                  <thead>
-                                    <tr style={{borderBottom:"1px solid #1e3a5f22"}}>
-                                      {["월","주문건수","환불금액"].map(h=>(
-                                        <th key={h} style={{padding:"5px 10px",textAlign:"center",color:"#2d4a6e",fontWeight:600}}>{h}</th>
-                                      ))}
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {months.map((m,mi)=>(
-                                      <tr key={mi} style={{borderBottom:"1px solid #0a122011"}}
-                                        onMouseEnter={e=>e.currentTarget.style.background="#0a152811"}
-                                        onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                                        <td style={{padding:"5px 10px",color:"#4a6fa5",textAlign:"center",fontWeight:600}}>{m.month}</td>
-                                        <td style={{padding:"5px 10px",color:"#3b82f6",textAlign:"center",fontWeight:700}}>{fmt(m.orders)}</td>
-                                        <td style={{padding:"5px 10px",color:"#f59e0b",textAlign:"center"}}>{currencySymbol}{fmt(Math.round(m.amount))}</td>
-                                      </tr>
-                                    ))}
-                                    <tr style={{borderTop:"1px solid #1e3a5f33",fontWeight:700}}>
-                                      <td style={{padding:"5px 10px",color:"#e8f4ff",textAlign:"center"}}>합계</td>
-                                      <td style={{padding:"5px 10px",color:"#3b82f6",textAlign:"center"}}>{fmt(months.reduce((s,m)=>s+m.orders,0))}</td>
-                                      <td style={{padding:"5px 10px",color:"#f59e0b",textAlign:"center"}}>{currencySymbol}{fmt(Math.round(months.reduce((s,m)=>s+m.amount,0)))}</td>
-                                    </tr>
-                                  </tbody>
-                                </table>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })()}
                     );
+                    const detailRow = expandedYear===row.year ? (
+                      <tr key={`det-${i}`} style={{background:"#060d18"}}>
+                        <td colSpan={8} style={{padding:0}}>
+                          <div style={{padding:"10px 20px",borderBottom:"1px solid #1e3a5f"}}>
+                            <div style={{fontSize:11,color:countryColor,fontWeight:700,marginBottom:8}}>📅 {row.year}년 월별 상세</div>
+                            <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}>
+                              <thead>
+                                <tr style={{borderBottom:"1px solid #1e3a5f22"}}>
+                                  {["월","주문건수","환불금액"].map(h=>(
+                                    <th key={h} style={{padding:"5px 10px",textAlign:"center",color:"#2d4a6e",fontWeight:600}}>{h}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {months.map((m,mi)=>(
+                                  <tr key={mi} style={{borderBottom:"1px solid #0a122011"}}>
+                                    <td style={{padding:"5px 10px",color:"#4a6fa5",textAlign:"center",fontWeight:600}}>{m.month}</td>
+                                    <td style={{padding:"5px 10px",color:"#3b82f6",textAlign:"center",fontWeight:700}}>{fmt(m.orders)}</td>
+                                    <td style={{padding:"5px 10px",color:"#f59e0b",textAlign:"center"}}>{currencySymbol}{fmt(Math.round(m.amount))}</td>
+                                  </tr>
+                                ))}
+                                <tr style={{borderTop:"1px solid #1e3a5f33",fontWeight:700}}>
+                                  <td style={{padding:"5px 10px",color:"#e8f4ff",textAlign:"center"}}>합계</td>
+                                  <td style={{padding:"5px 10px",color:"#3b82f6",textAlign:"center"}}>{fmt(months.reduce((s,m)=>s+m.orders,0))}</td>
+                                  <td style={{padding:"5px 10px",color:"#f59e0b",textAlign:"center"}}>{currencySymbol}{fmt(Math.round(months.reduce((s,m)=>s+m.amount,0)))}</td>
+                                </tr>
+                              </tbody>
+                            </table>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null;
+                    return [mainRow, detailRow].filter(Boolean);
                   })}
                   {(()=>{
                     const totOrders=yearlyChart.reduce((s,r)=>s+r.주문건수,0);
