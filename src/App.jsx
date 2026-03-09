@@ -801,7 +801,9 @@ function Dashboard({ country, parsedData, onBack }) {
               <button onClick={()=>{
                 const rows=yearlyChart.map(row=>{
                   const yas=yearlyAbuseStats[row.year]||{sanctioned:0,recovered:0,resanctioned:0};
-                  return{"연도":row.year+"년","주문건수":row.주문건수,"제재건수":yas.sanctioned,"복구수":yas.recovered,"복구율":yas.sanctioned?Math.round(yas.recovered/yas.sanctioned*100)+"%":"0%","복구금액("+currencyCode+")":Math.round(yas.recoveredAmount||0),"재제재수":yas.resanctioned,"재제재율":yas.sanctioned?Math.round(yas.resanctioned/yas.sanctioned*100)+"%":"0%"};
+                  const row2={"연도":row.year+"년","주문건수":row.주문건수,"제재건수":yas.sanctioned,"복구수":yas.recovered,"복구율":yas.sanctioned?Math.round(yas.recovered/yas.sanctioned*100)+"%":"0%","재제재수":yas.resanctioned,"재제재율":yas.sanctioned?Math.round(yas.resanctioned/yas.sanctioned*100)+"%":"0%"};
+                  row2["복구금액("+currencyCode+")"]=Math.round(yas.recoveredAmount||0);
+                  return row2;
                 });
                 const ws=XLSX.utils.json_to_sheet(rows);const wb2=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb2,ws,"연도별분석");XLSX.writeFile(wb2,`${country}_Google_연도별분석_${new Date().toISOString().slice(0,10)}.xlsx`);
               }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:"#16a34a",color:"#fff",cursor:"pointer",fontWeight:700,fontSize:12}}>📥 엑셀 다운로드</button>
