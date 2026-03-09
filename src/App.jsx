@@ -839,9 +839,9 @@ function Dashboard({ country, parsedData, onBack }) {
                       </tr>
                       {expandedYear===row.year&&(()=>{
                         const months = monthlyStats[row.year]||[];
-                        return(<>
+                        return(
                           <tr style={{background:"#060d18"}}>
-                            <td colSpan={7} style={{padding:0}}>
+                            <td colSpan={8} style={{padding:0}}>
                               <div style={{padding:"10px 20px",borderBottom:"1px solid #1e3a5f"}}>
                                 <div style={{fontSize:11,color:countryColor,fontWeight:700,marginBottom:8}}>📅 {row.year}년 월별 상세</div>
                                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}>
@@ -872,7 +872,7 @@ function Dashboard({ country, parsedData, onBack }) {
                               </div>
                             </td>
                           </tr>
-                        </>);
+                        );
                       })()}
                     );
                   })}
