@@ -84,11 +84,12 @@ function parseExcelFile(wb) {
 
     // ━━━ 시트1: 악용 대상자 UC 보유 정보 ━━━
     if (sLower.includes("uc 보유") || sLower.includes("uc보유") || sLower.includes("보유 정보") ||
-        sLower.includes("보유정보") || sLower.includes("악용 대상자 uc") || sLower.includes("악용대상자uc")) {
+        sLower.includes("보유정보") || sLower.includes("악용 대상자 uc") || sLower.includes("악용대상자uc") ||
+        sLower.includes("대상자 uc") || sLower.includes("대상자uc") || (sLower.includes("대상자") && sLower.includes("보유"))) {
       const ci = {
         openid: fc("오픈 아이디","오픈아이디","openid","open id","open_id","오픈 id","오픈id"),
         orderNo: fc("주문번호","order number","order no","orderid"),
-        currency: fc("화폐","currency","통화"),
+        currency: fc("화폐","currency","통화") >= 0 ? fc("화폐","currency","통화") : 7,
         ucBalance: fc("uc잔액","uc 잔액","잔액","현재 보유","현재보유"),
         time: fc("시간","time","날짜","date","기간"),
         amount: fc("charged amount","item price","payamt","금액","amount"),
@@ -99,15 +100,15 @@ function parseExcelFile(wb) {
         const openid = String(row[ci.openid] ?? "").trim();
         const orderNo = String(row[ci.orderNo] ?? "").trim();
         if (!openid && !orderNo) continue;
-        // Google AOS 전용: GPA로 시작하는 주문번호만
-        if (orderNo && !orderNo.toUpperCase().startsWith("GPA")) continue;
         const currency = String(row[ci.currency] ?? "KRW").trim().toUpperCase() || "KRW";
         const country = getCountry(currency);
+        // 기타 국가(KRW/JPY 아닌 경우) 제외
+        if (country === "기타") continue;
         const dateRaw = ci.time >= 0 ? row[ci.time] : "";
         const date = parseDate(String(dateRaw||"")) || "";
         const amount = Math.abs(parseNum(ci.amount >= 0 ? row[ci.amount] : 0));
         orderRows.push({
-          orderNo, openid, currency, country, platform: "Google",
+          orderNo, openid, currency, country, platform: "Google", // Google AOS 전용
           date, year: date.slice(0,4), month: date.slice(0,7),
           ucBalance: parseNum(ci.ucBalance >= 0 ? row[ci.ucBalance] : 0),
           amount, type: "UC보유정보",
@@ -439,7 +440,10 @@ function Dashboard({ country, parsedData, onBack }) {
 
   const allAbuseMap = useMemo(() => {
     const map = {};
-    parsedData.abuseRows.filter(a=>a.country===country).forEach(a=>{ if(a.openid) map[a.openid]=a; });
+    const normalizeOid = (oid) => String(oid||"").trim().replace(/\.0+$/, "");
+    parsedData.abuseRows.filter(a=>a.country===country).forEach(a=>{
+      if(a.openid) map[normalizeOid(a.openid)]=a;
+    });
     return map;
   }, [parsedData, country]);
 
@@ -485,9 +489,16 @@ function Dashboard({ country, parsedData, onBack }) {
 
   const sheetOidMap = useMemo(() => {
     const map = {};
+    // OpenID 정규화: 공백 제거, 소수점 숫자 정수 변환 (예: "123.0" → "123")
+    const normalizeOid = (oid) => {
+      const s = String(oid||"").trim();
+      // 소수점으로 끝나는 숫자 처리 (예: 87886238450985.0 → 87886238450985)
+      return s.replace(/\.0+$/, "");
+    };
     [...responseData].sort((a,b)=>a.date.localeCompare(b.date)).forEach(d => {
       if (!d.openid) return;
-      if (!map[d.openid]||d.date>=map[d.openid].lastDate) map[d.openid]={status:d.status,lastDate:d.date};
+      const key = normalizeOid(d.openid);
+      if (!map[key]||d.date>=map[key].lastDate) map[key]={status:d.status,lastDate:d.date};
     });
     return map;
   }, [responseData]);
@@ -498,7 +509,8 @@ function Dashboard({ country, parsedData, onBack }) {
     // 환불 금액: OrderID 시트 amount 우선, 없으면 UC보유정보 amount
     const amountTotal = filtered.filter(d=>d.type==="UC보유정보").reduce((s,d)=>s+Math.abs(d.amount||0),0);
 
-    const abuseUniqueOids = [...new Set(allAbuseRows.map(a=>a.openid).filter(Boolean))];
+    const normalizeOid = (oid) => String(oid||"").trim().replace(/\.0+$/, "");
+    const abuseUniqueOids = [...new Set(allAbuseRows.map(a=>normalizeOid(a.openid)).filter(Boolean))];
     const totalAbuseUnique = abuseUniqueOids.length;
     let sanctioned=0, recovered=0;
     abuseUniqueOids.forEach(oid=>{
@@ -508,7 +520,7 @@ function Dashboard({ country, parsedData, onBack }) {
     });
     let respRecovered=0, respResanctioned=0;
     abuseUniqueOids.forEach(oid=>{
-      const sv=sheetOidMap[oid];
+      const sv=sheetOidMap[oid] || sheetOidMap[String(oid).replace(/\.0+$/, "")];
       if(!sv) return;
       if(sv.status==="복구완료") respRecovered++;
       else if(sv.status==="재제재") respResanctioned++;
@@ -815,7 +827,7 @@ function Dashboard({ country, parsedData, onBack }) {
           </div>
         ):(<>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10,marginBottom:14}}>
-            <Card icon="📋" label="총 대응건수" value={fmt(filteredResp.length)} sub="행 기준" color="#3b82f6"/>
+            <Card icon="📋" label="총 제재 대상" value={fmt(stats.totalAbuseUnique)} sub="유니크 OpenID 기준" color="#3b82f6"/>
             <Card icon="✅" label="복구 완료" value={fmt(stats.respRecovered)} sub={`${stats.totalAbuseUnique?Math.round(stats.respRecovered/stats.totalAbuseUnique*100):0}%`} color="#22c55e"/>
             <Card icon="🚫" label="재제재" value={fmt(stats.respResanctioned)} sub={`${stats.totalAbuseUnique?Math.round(stats.respResanctioned/stats.totalAbuseUnique*100):0}%`} color="#ef4444"/>
           </div>
@@ -933,6 +945,36 @@ function Dashboard({ country, parsedData, onBack }) {
                   </div>
                 )}
               </div>
+              {/* 대응 히스토리 타임라인 */}
+              {searchRes.history.length>0&&(
+                <div style={{background:"#0d1b2e",borderRadius:14,padding:18,border:"1px solid #1e3a5f"}}>
+                  <div style={{fontSize:13,color:"#4a6fa5",fontWeight:600,marginBottom:16}}>
+                    📋 대응 히스토리 ({searchRes.history.length}건 · 날짜순)
+                  </div>
+                  {searchRes.history.map((h,i)=>{
+                    const col=STATUS_COLORS[h.status]||"#4a6fa5";
+                    const isLast=i===searchRes.history.length-1;
+                    return(
+                      <div key={i} style={{display:"flex",gap:14,alignItems:"flex-start"}}>
+                        <div style={{display:"flex",flexDirection:"column",alignItems:"center"}}>
+                          <div style={{width:30,height:30,borderRadius:"50%",background:isLast?col:col+"33",border:`2px solid ${col}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,flexShrink:0}}>
+                            {h.status==="복구완료"?"✅":"🚫"}
+                          </div>
+                          {!isLast&&<div style={{width:2,height:32,background:"#1e3a5f"}}/>}
+                        </div>
+                        <div style={{paddingBottom:isLast?0:12,flex:1,background:isLast?col+"11":"transparent",borderRadius:isLast?8:0,padding:isLast?"8px 12px":"0 0 12px 0",border:isLast?`1px solid ${col}33`:"none"}}>
+                          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:4,flexWrap:"wrap"}}>
+                            <span style={{fontSize:12,fontWeight:700,color:"#e8f4ff"}}>{h.date}</span>
+                            <span style={{padding:"2px 8px",borderRadius:4,fontSize:10,background:col+"22",color:col}}>{h.status}</span>
+                            {isLast&&<span style={{fontSize:10,color:col,fontWeight:700}}>← 최신</span>}
+                          </div>
+                          {h.resultText&&<div style={{fontSize:11,color:"#4a6fa5",whiteSpace:"pre-wrap",wordBreak:"break-all"}}>{h.resultText.slice(0,200)}{h.resultText.length>200?"...":""}</div>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               {searchRes.orders.length===0&&searchRes.history.length===0&&(
                 <div style={{background:"#0d1b2e",borderRadius:14,padding:24,textAlign:"center",color:"#2d4a6e",fontSize:13}}>
                   <strong style={{color:"#c8d8f0"}}>{searchRes.q}</strong> — {country} Google Play 데이터 없음
