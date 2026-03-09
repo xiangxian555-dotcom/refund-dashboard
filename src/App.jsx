@@ -10,12 +10,17 @@ const TT = { contentStyle: { background: "#060d18", border: "1px solid #1e3a5f",
 const SHEET_ID = "1xySVvqx0DXiox8fkvMAr86WzP1hTdHzJuxf63iop6l8";
 const TABS = ["마켓 환불 현황", "연도별 분석", "세그먼트", "CS대응현황", "유저 조회", "AI 분석"];
 
-const GSHEET_TARGETS = [
-  { label: "한국 AOS", country: "한국", platform: "Google", gid: "0" },
-  { label: "한국 iOS", country: "한국", platform: "iOS", gid: "123906372" },
-  { label: "일본 Google", country: "일본", platform: "Google", gid: "849352972" },
-  { label: "일본 Apple", country: "일본", platform: "iOS", gid: "1689075940" },
-];
+// 국가별 Google Sheets GID 설정 (코드에 고정)
+const GSHEET_TARGETS = {
+  한국: [
+    { label: "한국 AOS", platform: "Google", gid: "0" },
+    { label: "한국 iOS", platform: "iOS", gid: "123906372" },
+  ],
+  일본: [
+    { label: "일본 Google", platform: "Google", gid: "1689075940" },
+    { label: "일본 Apple", platform: "iOS", gid: "849352972" },
+  ],
+};
 
 const CURRENCY_COUNTRY = { KRW: "한국", JPY: "일본" };
 const SEG_COLORS = {
@@ -58,22 +63,12 @@ function detectPlatform(sheetName) {
   return null;
 }
 
-function detectCountry(sheetName) {
-  const s = sheetName;
-  if (/일본|japan|jp|日本/i.test(s)) return "일본";
-  if (/한국|korea|kr|韓国/i.test(s)) return "한국";
-  return null;
-}
-
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 엑셀 파일 파싱 — 시트명으로 자동 인식
+// 엑셀 파싱
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function parseExcelFile(wb) {
-  // 시트1: 악용 대상자 UC 보유 정보 → 주문건수 + 유니크 OpenID + 날짜
-  // 시트2: 결제취소 악용자 리스트 → OpenID + G열 회수/제재
-  // 시트3: 결제취소 악용 대상자 OrderID → 주문번호 원본 (보조)
-  const orderRows = [];   // 주문 행 (UC보유정보 시트 기준)
-  const abuseRows = [];   // 최종 처리 결과 (악용자 리스트 G열)
+  const orderRows = [];
+  const abuseRows = [];
   const log = [];
 
   const getHeaders = (raw) => {
@@ -106,9 +101,9 @@ function parseExcelFile(wb) {
     const { headerIdx, headers } = getHeaders(raw);
     const fc = (...n) => findCol(headers, ...n);
 
-    // ━━━ 시트1: 악용 대상자 UC 보유 정보 ━━━
-    // → 주문건수 + 유니크 OpenID + 날짜 + 화폐(국가)
-    if (sLower.includes("uc 보유") || sLower.includes("uc보유") || sLower.includes("보유 정보") || sLower.includes("보유정보") || sLower.includes("악용 대상자 uc") || sLower.includes("악용대상자uc")) {
+    // 시트1: 악용 대상자 UC 보유 정보
+    if (sLower.includes("uc 보유") || sLower.includes("uc보유") || sLower.includes("보유 정보") ||
+        sLower.includes("보유정보") || sLower.includes("악용 대상자 uc") || sLower.includes("악용대상자uc")) {
       const ci = {
         openid: fc("오픈 아이디","오픈아이디","openid","open id","open_id","오픈 id","오픈id"),
         orderNo: fc("주문번호","order number","order no","orderid"),
@@ -143,8 +138,7 @@ function parseExcelFile(wb) {
       log.push({ sheet: sName, type: "UC보유정보", count: parsed });
     }
 
-    // ━━━ 시트1b: 결제취소 악용 대상자 OrderID (구글 마켓 원본) ━━━
-    // → 주문번호 + OpenID + 금액 + 날짜
+    // 시트1b: OrderID 시트
     else if (sLower.includes("orderid") || sLower.includes("악용 대상자 order") || sLower.includes("대상자 orderid")) {
       const ci = {
         orderNo: fc("order number","주문번호","orderid","order no"),
@@ -153,13 +147,11 @@ function parseExcelFile(wb) {
         amount: fc("charged amount","item price","payamt","금액"),
         time: fc("order charged date","orderdate","시간","date","날짜","ordertime"),
       };
-      // OrderID 시트에 openid 없을 수도 있음 - orderNo만으로도 파싱
       let parsed = 0;
       for (let i = headerIdx + 1; i < raw.length; i++) {
         const row = raw[i];
         const orderNo = String(row[ci.orderNo] ?? "").trim();
         if (!orderNo) continue;
-        // 이미 UC보유정보에서 같은 주문번호가 있으면 금액만 업데이트
         const existing = orderRows.find(o => o.orderNo === orderNo);
         const amount = Math.abs(parseNum(ci.amount >= 0 ? row[ci.amount] : 0));
         if (existing) {
@@ -183,12 +175,10 @@ function parseExcelFile(wb) {
       log.push({ sheet: sName, type: "OrderID", count: parsed });
     }
 
-    // ━━━ 시트2: 결제취소 악용자 리스트 ━━━
-    // → OpenID + G열(회수/제재) 최종 처리결과
+    // 시트2: 악용자 리스트
     else if (sLower.includes("악용자 리스트") || sLower.includes("악용자리스트") ||
              (sLower.includes("악용자") && sLower.includes("리스트")) ||
              sLower.includes("결제취소 악용자")) {
-      // A:화폐 B:OPENID C:악용횟수 D:누적획득UC E:현재보유UC F:P값 G:처리결과
       const ci = {
         currency: fc("화폐","currency") >= 0 ? fc("화폐","currency") : 0,
         openid: fc("openid","오픈","open id","open_id") >= 0 ? fc("openid","오픈","open id","open_id") : 1,
@@ -196,23 +186,17 @@ function parseExcelFile(wb) {
         totalUC: fc("누적 획득","누적획득","누적"),
         currentUC: fc("현재 보유","현재보유","현재"),
         pValue: fc("p값","p 값"),
-        // G열 = 처리결과 (헤더 없어도 인덱스 6)
         result: fc("회수","제재","처리결과","결과","처리") >= 0 ? fc("회수","제재","처리결과","결과","처리") : 6,
       };
-
       let parsed = 0;
       for (let i = headerIdx + 1; i < raw.length; i++) {
         const row = raw[i];
         const openid = String(row[ci.openid] ?? "").trim();
         if (!openid) continue;
-
         const currency = String(row[ci.currency] ?? "KRW").trim().toUpperCase() || "KRW";
         const country = getCountry(currency);
         const platform = detectPlatform(sName) || "Google";
-        // G열 처리결과
         const resultText = String(row[ci.result] ?? "").trim();
-
-        // G열 텍스트 기준: "제재" 포함→제재, "회수" 포함→회수, "uc부족"→미처리
         const hasJesae = /제재/.test(resultText);
         const hasHoesu = /회수/.test(resultText);
         let action = "미처리";
@@ -220,7 +204,6 @@ function parseExcelFile(wb) {
         else if (hasJesae) action = "제재";
         else if (hasHoesu) action = "회수";
         else if (/uc부족|uc 부족|부족/.test(resultText.toLowerCase())) action = "제재";
-
         const pValue = parseNum(ci.pValue >= 0 ? row[ci.pValue] : 0);
         abuseRows.push({
           openid, currency, country, platform,
@@ -234,7 +217,7 @@ function parseExcelFile(wb) {
       }
       log.push({ sheet: sName, type: "악용자", count: parsed });
     }
-    // ━━━ 시트: iOS 환불악용 유저 리스트 (vopenid, payamt, ordertime) ━━━
+    // iOS 시트
     else if (sLower.includes("ios") || sLower.includes("apple") || sLower.includes("앱스토어") ||
              sLower.includes("환불악용") || sLower.includes("ios 환불")) {
       const ci = {
@@ -266,10 +249,8 @@ function parseExcelFile(wb) {
       }
       log.push({ sheet: sName, type: "iOS주문", count: parsed });
     }
-    // 계산하기, Sheet1 등 기타 시트는 무시
   });
 
-  // OpenID → country/platform 매핑
   const oidInfo = {};
   orderRows.forEach(o => {
     if (o.openid && !oidInfo[o.openid]) {
@@ -277,13 +258,9 @@ function parseExcelFile(wb) {
     }
   });
 
-  // ★ 악용자 리스트 OpenID → 처리결과 맵 (빠른 조회용)
-  const abuseMap = {}; // openid → { action, resultText, ... }
-  abuseRows.forEach(a => {
-    if (a.openid) abuseMap[a.openid] = a;
-  });
+  const abuseMap = {};
+  abuseRows.forEach(a => { if (a.openid) abuseMap[a.openid] = a; });
 
-  // ★ 유니크 OpenID 목록 (UC보유정보 기준, 중복 제거)
   const uniqueOidSet = new Set(orderRows.map(o => o.openid).filter(Boolean));
 
   return { orderRows, abuseRows, abuseMap, oidInfo, uniqueOidSet, log };
@@ -320,7 +297,6 @@ function parseGSheetCSV(text, country, platform) {
   const allRows = parseCSV(text);
   if (allRows.length < 3) return [];
 
-  // 헤더 행 탐색
   let headerIdx = 0;
   for (let i = 0; i < Math.min(8, allRows.length); i++) {
     if (allRows[i].some(c => /openid|open.id|オープン|캐릭|キャラ/i.test(c||""))) {
@@ -345,18 +321,13 @@ function parseGSheetCSV(text, country, platform) {
     amount: findCol("金額","금액","amount"),
   };
 
-  // 마지막 컬럼을 result로 (한국 기준)
   let resultIdx = headers.length - 1;
   for (let c = headers.length - 1; c >= 0; c--) {
     if (headers[c] && headers[c].trim()) { resultIdx = c; break; }
   }
 
-  // 일본 시트: Y열 인덱스 찾기
   const isJapan = country === "일본";
-  // Y열 = 알파벳 Y = 24번째 열 (0-based: 24)
-  // 헤더에서 Y열에 해당하는 인덱스 찾기 (코멘트 히스토리 열)
-  let japanCommentIdx = 24; // 기본값 Y열
-  // 헤더에서 코멘트/comment/対応 관련 열 찾기
+  let japanCommentIdx = 24;
   for (let c = 0; c < headers.length; c++) {
     if (/コメント|comment|対応内容|履歴|history/i.test(headers[c]||"")) {
       japanCommentIdx = c; break;
@@ -365,28 +336,18 @@ function parseGSheetCSV(text, country, platform) {
 
   const get = (row, idx) => (idx >= 0 && idx < row.length) ? (row[idx]||"").trim() : "";
 
-  // 상태 판단 함수
   const classifyStatus = (row) => {
     if (isJapan) {
-      // 일본: Y열(japanCommentIdx) 마지막 줄 코멘트 판단
       const commentCell = get(row, japanCommentIdx);
-      // 마지막 줄 추출 (줄바꿈으로 분리)
       const lines = commentCell.split(/\n|\r/).map(l=>l.trim()).filter(Boolean);
       const lastLine = lines[lines.length - 1] || "";
-      const allText = commentCell; // 전체 텍스트도 참고
-
-      // 복구완료: 回収完了, 解除完了, 対応完了, 回収いたしました 등
+      const allText = commentCell;
       if (/回収完了|解除完了|回収いたしました|UCの回収|回収を行|案内済み|対応完了|チャージ完了|복구완료|회수완료/.test(lastLine)) return "복구완료";
       if (/回収完了|解除完了|回収いたしました|UCの回収|回収を行|案内済み|対応完了/.test(allText) && !/ヒアリング中|希望日/.test(lastLine)) return "복구완료";
-
-      // 재제재: BANいたしました, BAN処理, 期限が過ぎたためBAN 등
       if (/BANいたしました|BAN処理|期限が過ぎたためBAN|再度BAN|停止いたしました|BANしました/.test(lastLine)) return "재제재";
       if (/BANいたしました|BAN処理いたしました|期限が過ぎたためBAN/.test(allText) && !/案内/.test(lastLine)) return "재제재";
-
-      // 처리중: ヒアリング, 希望日, 빈칸 등
       return "처리중";
     } else {
-      // 한국: 마지막 열 텍스트 판단
       const resultText = get(row, resultIdx);
       if (!resultText || resultText === "-") return "처리중";
       if (/회수|해제|복구|완료|정상화|재충전|回収|解除|回収完了/.test(resultText)) return "복구완료";
@@ -396,19 +357,15 @@ function parseGSheetCSV(text, country, platform) {
   };
 
   const results = [];
-
   for (let i = headerIdx + 1; i < allRows.length; i++) {
     const row = allRows[i];
     if (!row || row.every(c => !c||c.trim()==="")) continue;
     const openid = get(row, ci.openid);
     if (!openid) continue;
-
     const resultText = isJapan ? get(row, japanCommentIdx) : get(row, resultIdx);
     const status = classifyStatus(row);
-
     const dateRaw = get(row, ci.date);
     const date = parseDate(dateRaw) || dateRaw.slice(0,10) || "";
-
     results.push({
       openid, country, platform,
       date, year: date.slice(0,4), month: date.slice(0,7),
@@ -436,137 +393,222 @@ const Card = ({ icon, label, value, sub, color="#3b82f6" }) => (
 );
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 메인 앱
+// 랜딩 페이지 (파일 업로드 + 국가 선택)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-export default function App() {
-  const [marketTab, setMarketTab] = useState("Google"); // Google / iOS
-  const [countryTab, setCountryTab] = useState("전체");   // 전체 / 한국 / 일본
+function LandingPage({ onEnter, parsedData, uploadLog, onFile, fileNames }) {
+  const hasData = parsedData !== null;
+
+  return (
+    <div style={{
+      fontFamily:"'Pretendard','Apple SD Gothic Neo',sans-serif",
+      background:"#060d18", minHeight:"100vh", color:"#c8d8f0",
+      display:"flex", flexDirection:"column", alignItems:"center",
+      justifyContent:"center", padding:"40px 20px", position:"relative", overflow:"hidden"
+    }}>
+      {/* 배경 그리드 */}
+      <div style={{
+        position:"absolute", inset:0,
+        backgroundImage:"linear-gradient(#1e3a5f18 1px,transparent 1px),linear-gradient(90deg,#1e3a5f18 1px,transparent 1px)",
+        backgroundSize:"40px 40px", pointerEvents:"none"
+      }}/>
+      {/* 배경 글로우 */}
+      <div style={{
+        position:"absolute", inset:0,
+        background:"radial-gradient(ellipse 50% 40% at 30% 50%,#0ea5e912 0%,transparent 60%), radial-gradient(ellipse 50% 40% at 70% 50%,#f9731612 0%,transparent 60%)",
+        pointerEvents:"none"
+      }}/>
+
+      {/* 헤더 */}
+      <div style={{ textAlign:"center", marginBottom:48, position:"relative", zIndex:1 }}>
+        <div style={{ display:"inline-flex", alignItems:"center", gap:8, padding:"5px 16px", borderRadius:20, border:"1px solid #1e3a5f", background:"#0d1b2e", fontSize:11, color:"#2d4a6e", letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:20 }}>
+          🎮 PUBG MOBILE · CS OPS TOOL
+        </div>
+        <h1 style={{ fontSize:"clamp(26px,5vw,44px)", fontWeight:900, lineHeight:1.1, letterSpacing:"-0.03em", color:"#e8f4ff", margin:"0 0 10px" }}>
+          결제취소 악용자<br/>
+          <span style={{ background:"linear-gradient(135deg,#0ea5e9,#38bdf8)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>
+            대응현황 대시보드
+          </span>
+        </h1>
+        <p style={{ color:"#2d4a6e", fontSize:13 }}>파일을 업로드한 후 국가를 선택해주세요</p>
+      </div>
+
+      {/* ── 파일 업로드 ── */}
+      <div style={{ width:"100%", maxWidth:640, marginBottom:36, position:"relative", zIndex:1 }}>
+        <div style={{ background:"#0d1b2e", borderRadius:16, padding:20, border:"1px solid #1e3a5f" }}>
+          <div style={{ fontSize:13, fontWeight:700, color:"#c8d8f0", marginBottom:4 }}>📁 엑셀 파일 업로드</div>
+          <div style={{ fontSize:11, color:"#2d4a6e", marginBottom:14 }}>
+            한국 + 일본 데이터가 모두 포함된 파일을 <strong style={{color:"#4a6fa5"}}>한 번만</strong> 업로드하세요
+          </div>
+
+          {/* 업로드된 파일 표시 */}
+          {fileNames.length > 0 && (
+            <div style={{ marginBottom:12, display:"flex", gap:8, flexWrap:"wrap" }}>
+              {fileNames.map((name,i) => (
+                <div key={i} style={{ background:"#060d18", borderRadius:8, padding:"6px 12px", border:"1px solid #22c55e44", display:"flex", alignItems:"center", gap:6 }}>
+                  <span style={{ fontSize:11, color:"#22c55e" }}>✅ {name}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div
+            onClick={()=>{ const inp=document.createElement("input"); inp.type="file"; inp.accept=".xlsx,.xls"; inp.multiple=true; inp.onchange=e=>[...e.target.files].forEach(onFile); inp.click(); }}
+            onDrop={e=>{ e.preventDefault(); [...e.dataTransfer.files].forEach(onFile); }}
+            onDragOver={e=>e.preventDefault()}
+            style={{ border:"2px dashed #1e3a5f", borderRadius:10, padding:"20px", textAlign:"center", cursor:"pointer", transition:"all 0.2s" }}
+            onMouseEnter={e=>e.currentTarget.style.borderColor="#3b82f6"}
+            onMouseLeave={e=>e.currentTarget.style.borderColor="#1e3a5f"}
+          >
+            <div style={{ fontSize:28, marginBottom:6 }}>📂</div>
+            <div style={{ fontSize:13, color:"#4a6fa5", fontWeight:600 }}>클릭 또는 드래그하여 업로드</div>
+            <div style={{ fontSize:11, color:"#1e3a5f", marginTop:4 }}>Google AOS + iOS 파일 모두 여기에</div>
+          </div>
+
+          {uploadLog.length > 0 && (
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginTop:10 }}>
+              {uploadLog.map((l,i) => (
+                <span key={i} style={{ fontSize:10, padding:"3px 8px", borderRadius:4, background:"#14532d", color:"#22c55e" }}>
+                  ✅ {l.sheet} ({l.type}: {l.count}건)
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── 국가 선택 카드 ── */}
+      <div style={{ display:"flex", gap:20, flexWrap:"wrap", justifyContent:"center", position:"relative", zIndex:1 }}>
+        {[
+          {
+            key:"한국", flag:"🇰🇷", title:"한국 대시보드",
+            desc:"Google Play · iOS\nKRW 기준 · 한국 CS팀 전용",
+            color:"#0ea5e9", bgFrom:"#0a1e3a",
+            tags:["AOS","iOS","KRW"],
+            disabled: !hasData,
+          },
+          {
+            key:"일본", flag:"🇯🇵", title:"日本ダッシュボード",
+            desc:"Google Play · Apple\nJPY 기준 · 일본 CS팀 전용",
+            color:"#f97316", bgFrom:"#1a100a",
+            tags:["AOS","iOS","JPY"],
+            disabled: !hasData,
+          }
+        ].map(card => (
+          <div
+            key={card.key}
+            onClick={() => !card.disabled && onEnter(card.key)}
+            style={{
+              width:280, borderRadius:20, padding:"32px 28px",
+              cursor: card.disabled ? "not-allowed" : "pointer",
+              background: `linear-gradient(145deg,${card.bgFrom},#0d1b2e)`,
+              border:`1px solid ${card.disabled ? "#1e3a5f" : card.color+"55"}`,
+              boxShadow: card.disabled ? "none" : `0 0 30px ${card.color}12`,
+              opacity: card.disabled ? 0.4 : 1,
+              transition:"all 0.3s ease",
+              position:"relative", overflow:"hidden",
+            }}
+            onMouseEnter={e=>{ if(!card.disabled){ e.currentTarget.style.transform="translateY(-8px)"; e.currentTarget.style.boxShadow=`0 20px 50px ${card.color}28, 0 0 0 1px ${card.color}66`; }}}
+            onMouseLeave={e=>{ e.currentTarget.style.transform="translateY(0)"; e.currentTarget.style.boxShadow=card.disabled?"none":`0 0 30px ${card.color}12`; }}
+          >
+            {/* 글로우 */}
+            <div style={{ position:"absolute", top:-40, right:-40, width:140, height:140, borderRadius:"50%", background:`radial-gradient(circle,${card.color}20,transparent 70%)`, pointerEvents:"none" }}/>
+
+            <div style={{ fontSize:48, marginBottom:14 }}>{card.flag}</div>
+            <div style={{ fontSize:20, fontWeight:900, color:card.color, marginBottom:6, letterSpacing:"-0.02em" }}>{card.title}</div>
+            <div style={{ fontSize:11, color:"#2d4a6e", marginBottom:20, lineHeight:1.7, whiteSpace:"pre-line" }}>{card.desc}</div>
+
+            <div style={{ display:"flex", gap:8, marginBottom:20 }}>
+              {card.tags.map(t => (
+                <div key={t} style={{ flex:1, background:"#ffffff08", borderRadius:8, padding:"8px 0", textAlign:"center" }}>
+                  <div style={{ fontSize:13, fontWeight:700, color:card.color }}>{t}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", paddingTop:16, borderTop:"1px solid #ffffff0f", fontSize:12, fontWeight:700, color:card.color }}>
+              <span>{card.disabled ? "파일을 먼저 업로드하세요" : "대시보드 입장"}</span>
+              {!card.disabled && <span style={{fontSize:18}}>→</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {!hasData && (
+        <div style={{ marginTop:24, fontSize:12, color:"#1e3a5f", position:"relative", zIndex:1 }}>
+          ⬆️ 파일을 업로드하면 국가 선택이 활성화됩니다
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 대시보드 (국가 전용)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function Dashboard({ country, parsedData, onBack }) {
+  const [marketTab, setMarketTab] = useState("Google");
   const [tab, setTab] = useState("마켓 환불 현황");
   const [yearFilter, setYearFilter] = useState("전체");
   const [monthFilter, setMonthFilter] = useState("전체");
   const [segFilter, setSegFilter] = useState("전체");
   const [csStatusTab, setCsStatusTab] = useState("");
 
-  // 엑셀 데이터 (파일 2개: Google/iOS 각각)
-  const [files, setFiles] = useState([]); // [{name, orderRows, abuseRows, oidInfo, log}]
-  const [uploadLog, setUploadLog] = useState([]);
-
-  // Google Sheets 대응현황
   const [responseData, setResponseData] = useState([]);
   const [sheetLoading, setSheetLoading] = useState(false);
   const [sheetErr, setSheetErr] = useState("");
   const [sheetStatus, setSheetStatus] = useState([]);
   const [lastFetch, setLastFetch] = useState("");
 
-  // AI 채팅
   const [chatMessages, setChatMessages] = useState([
-    { role:"assistant", content:"안녕하세요! 결제취소 악용자 대응현황을 분석해드립니다 😊\n\n예시 질문:\n• 2026년 구글 한국 주문건수 몇 건이에요?\n• 일본 유저 중 제재된 사람 몇 명이에요?\n• 복구 완료율이 어떻게 돼요?\n• 전체 회수 vs 제재 비율 알려줘" }
+    { role:"assistant", content:`안녕하세요! ${country} 결제취소 악용자 대응현황을 분석해드립니다 😊\n\n예시 질문:\n• 2026년 구글 주문건수 몇 건이에요?\n• 제재된 사람 몇 명이에요?\n• 복구 완료율이 어떻게 돼요?\n• 전체 회수 vs 제재 비율 알려줘` }
   ]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const chatEndRef = useRef(null);
 
-  // 유저 조회
   const [searchQ, setSearchQ] = useState("");
   const [searchRes, setSearchRes] = useState(null);
 
-  // 실시간 환율 (KRW 기준)
-  const [exchangeRates, setExchangeRates] = useState({ KRW:1, JPY:9, USD:1350, EUR:1470, TRY:42, SAR:360, VND:0.054, GBP:1710, CNY:186 });
-  const [ratesLoaded, setRatesLoaded] = useState(false);
-
-  // 토스트 알림
+  const [exchangeRates, setExchangeRates] = useState({ KRW:1, JPY:9, USD:1350 });
   const [toast, setToast] = useState(null);
+
   const showToast = (msg, color="#22c55e") => {
     setToast({ msg, color });
     setTimeout(() => setToast(null), 3000);
   };
 
-  // ── 파일 업로드 ──
-  const handleFile = useCallback(async (file) => {
-    if (!file) return;
-    try {
-      const ab = await file.arrayBuffer();
-      const wb = XLSX.read(ab);
-      const parsed = parseExcelFile(wb);
-      setFiles(prev => {
-        // 같은 파일명이면 교체, 아니면 추가 (최대 2개)
-        const existing = prev.findIndex(f => f.name === file.name);
-        const entry = { name: file.name, ...parsed };
-        if (existing >= 0) { const n=[...prev]; n[existing]=entry; return n; }
-        return [...prev, entry];
-      });
-      setUploadLog(parsed.log);
-      const orderCount = parsed.orderRows.length;
-      const uniqueCount = parsed.uniqueOidSet ? parsed.uniqueOidSet.size : 0;
-      const abuseCount = parsed.abuseRows.length;
-      showToast(`✅ ${file.name.slice(0,20)}... 업로드 완료! 주문 ${orderCount}건 · 유니크 ${uniqueCount}명 · 악용자 ${abuseCount}명`);
-    } catch(e) { showToast("❌ 파싱 오류: " + e.message, "#ef4444"); }
-  }, []);
+  const countryColor = country === "한국" ? "#0ea5e9" : "#f97316";
+  const countryFlag = country === "한국" ? "🇰🇷" : "🇯🇵";
+  const currencySymbol = country === "한국" ? "₩" : "¥";
 
-  // ── Google Sheets 불러오기 (API Route 방식) ──
-  const fetchSheets = useCallback(async () => {
-    setSheetLoading(true); setSheetErr(""); setSheetStatus([]);
-    try {
-      const res = await fetch("/api/sheets");
-      const data = await res.json();
-      if (data.success && data.data.length > 0) {
-        setResponseData(data.data);
-        setLastFetch(new Date().toLocaleTimeString());
-        // 시트별 카운트
-        const log = GSHEET_TARGETS.map(cfg => {
-          const count = data.data.filter(d => d.platform === cfg.platform && d.country === cfg.country).length;
-          return { label: cfg.label, count, ok: count > 0 };
-        });
-        setSheetStatus(log);
-      } else {
-        setSheetErr(data.error || "데이터를 불러오지 못했어요.");
-      }
-    } catch(e) {
-      setSheetErr("API 오류: " + e.message);
-    }
-    setSheetLoading(false);
-  }, []);
+  // ── 국가별 데이터만 필터 ──
+  const rawOrderRows = useMemo(() =>
+    parsedData.orderRows.filter(d => d.country === country),
+  [parsedData, country]);
 
-  // ── 전체 데이터 통합 ──
-  // 전체 raw 데이터
-  const rawOrderRows = useMemo(() => files.flatMap(f => f.orderRows), [files]);
-  const rawAbuseRows = useMemo(() => files.flatMap(f => f.abuseRows), [files]);
+  const rawAbuseRows = useMemo(() =>
+    parsedData.abuseRows.filter(d => d.country === country),
+  [parsedData, country]);
 
-  // marketTab + countryTab 필터 적용된 데이터
-  const allOrderRows = useMemo(() => rawOrderRows.filter(d => {
-    if (marketTab !== "전체" && d.platform !== marketTab) return false;
-    if (countryTab !== "전체" && d.country !== countryTab) return false;
-    return true;
-  }), [rawOrderRows, marketTab, countryTab]);
+  // marketTab 필터
+  const allOrderRows = useMemo(() =>
+    rawOrderRows.filter(d => marketTab === "전체" || d.platform === marketTab),
+  [rawOrderRows, marketTab]);
 
-  const allAbuseRows = useMemo(() => rawAbuseRows.filter(d => {
-    if (marketTab !== "전체" && d.platform !== marketTab) return false;
-    if (countryTab !== "전체" && d.country !== countryTab) return false;
-    return true;
-  }), [rawAbuseRows, marketTab, countryTab]);
-  const allOidInfo = useMemo(() => {
-    const map = {};
-    files.forEach(f => Object.assign(map, f.oidInfo));
-    return map;
-  }, [files]); // oidInfo는 전체 유지 (유저 조회용)
+  const allAbuseRows = useMemo(() =>
+    rawAbuseRows.filter(d => marketTab === "전체" || d.platform === marketTab),
+  [rawAbuseRows, marketTab]);
 
-  // ★ 엑셀 파일의 악용자 리스트 G열 처리결과 맵 (openid → action) - marketTab 필터 적용
   const allAbuseMap = useMemo(() => {
     const map = {};
-    rawAbuseRows.filter(a => {
-      if (marketTab !== "전체" && a.platform !== marketTab) return false;
-      if (countryTab !== "전체" && a.country !== countryTab) return false;
-      return true;
-    }).forEach(a => { if (a.openid) map[a.openid] = a; });
+    rawAbuseRows.filter(a => marketTab === "전체" || a.platform === marketTab)
+      .forEach(a => { if (a.openid) map[a.openid] = a; });
     return map;
-  }, [rawAbuseRows, marketTab, countryTab]);
+  }, [rawAbuseRows, marketTab]);
 
-  // ★ 엑셀 전체 유니크 OpenID (UC보유정보 기준, 현재 marketTab/countryTab 필터 적용)
-  const allUniqueOids = useMemo(() => {
-    return new Set(allOrderRows.filter(d=>d.type==="UC보유정보").map(d=>d.openid).filter(Boolean));
-  }, [allOrderRows]);
+  const allOidInfo = useMemo(() => parsedData.oidInfo, [parsedData]);
 
-  // ── 필터 ──
+  // ── 연도/월 필터 ──
   const years = useMemo(() => {
     const ys = [...new Set(allOrderRows.map(d=>d.year))].filter(Boolean).sort();
     return ["전체", ...ys];
@@ -585,18 +627,34 @@ export default function App() {
     return true;
   }), [allOrderRows, yearFilter, monthFilter, segFilter]);
 
-  // 환율 변환 함수
-  const toKRW = useCallback((amount, currency) => {
-    const rate = exchangeRates[String(currency||"KRW").trim().toUpperCase()] || 1;
-    return Math.abs(amount) * rate;
-  }, [exchangeRates]);
+  // ── Google Sheets 불러오기 ──
+  const fetchSheets = useCallback(async () => {
+    setSheetLoading(true); setSheetErr(""); setSheetStatus([]);
+    const targets = GSHEET_TARGETS[country] || [];
+    try {
+      const res = await fetch("/api/sheets?country=" + encodeURIComponent(country));
+      const data = await res.json();
+      if (data.success && data.data.length > 0) {
+        setResponseData(data.data);
+        setLastFetch(new Date().toLocaleTimeString());
+        const log = targets.map(cfg => {
+          const count = data.data.filter(d => d.platform === cfg.platform).length;
+          return { label: cfg.label, count, ok: count > 0 };
+        });
+        setSheetStatus(log);
+      } else {
+        setSheetErr(data.error || "데이터를 불러오지 못했어요.");
+      }
+    } catch(e) {
+      setSheetErr("API 오류: " + e.message);
+    }
+    setSheetLoading(false);
+  }, [country]);
 
-  // ── Google Sheets: marketTab/countryTab 기준 필터된 responseData ──
-  const filteredResponseData = useMemo(() => responseData.filter(d => {
-    if (marketTab !== "전체" && d.platform !== marketTab) return false;
-    if (countryTab !== "전체" && d.country !== countryTab) return false;
-    return true;
-  }), [responseData, marketTab, countryTab]);
+  // ── 대응현황 데이터 필터 ──
+  const filteredResponseData = useMemo(() =>
+    responseData.filter(d => marketTab === "전체" || d.platform === marketTab),
+  [responseData, marketTab]);
 
   const filteredResp = useMemo(() => filteredResponseData.filter(d => {
     if (yearFilter!=="전체" && d.year!==yearFilter) return false;
@@ -605,13 +663,11 @@ export default function App() {
     return true;
   }), [filteredResponseData, yearFilter, monthFilter, segFilter]);
 
-  // OpenID → 최신 상태 맵
   const sheetOidMap = useMemo(() => {
     const map = {};
     [...filteredResponseData].sort((a,b)=>a.date.localeCompare(b.date)).forEach(d => {
       if (!d.openid) return;
-      if (!map[d.openid]) map[d.openid] = { status: d.status, lastDate: d.date, country: d.country, platform: d.platform };
-      if (d.date >= map[d.openid].lastDate) {
+      if (!map[d.openid] || d.date >= map[d.openid].lastDate) {
         map[d.openid] = { status: d.status, lastDate: d.date, country: d.country, platform: d.platform };
       }
     });
@@ -620,129 +676,72 @@ export default function App() {
 
   // ── 핵심 통계 ──
   const stats = useMemo(() => {
-    // 1. 총 주문건수 (UC보유정보 시트 건수만)
     const totalOrders = filtered.filter(d=>d.type==="UC보유정보").length;
-
-    // 2. 악용자 리스트 유니크 OpenID (제재 기준)
     const abuseUniqueOids = [...new Set(allAbuseRows.map(a=>a.openid).filter(Boolean))];
     const totalAbuseUnique = abuseUniqueOids.length;
 
-    // 3. 제재/회수 집계 (악용자 리스트 G열 기준)
-    let excelSanctioned = 0, excelRecovered = 0, excelBoth = 0;
+    let excelSanctioned = 0, excelRecovered = 0;
     abuseUniqueOids.forEach(oid => {
       const abuse = allAbuseMap[oid];
       if (!abuse) return;
-      if (abuse.action === "제재+회수") { excelSanctioned++; excelRecovered++; excelBoth++; }
+      if (abuse.action === "제재+회수") { excelSanctioned++; excelRecovered++; }
       else if (abuse.action === "제재") excelSanctioned++;
       else if (abuse.action === "회수") excelRecovered++;
     });
 
-    // 4. 복구완료/재제재/처리중 (악용자 리스트 OpenID → sheetOidMap 매칭)
     let respRecovered = 0, respResanctioned = 0, respProcessing = 0;
     abuseUniqueOids.forEach(oid => {
       const sv = sheetOidMap[oid];
-      if (!sv) { respProcessing++; return; } // 미매칭 → 처리중
+      if (!sv) { respProcessing++; return; }
       if (sv.status === "복구완료") respRecovered++;
       else if (sv.status === "재제재") respResanctioned++;
       else respProcessing++;
     });
-    const totalResp = totalAbuseUnique;
 
-    // 5. 세그먼트별 (UC보유정보 기준)
     const segStats = {};
-    // 주문건수 기준
     filtered.filter(d=>d.type==="UC보유정보").forEach(d => {
       segStats[d.segment]=(segStats[d.segment]||0)+1;
     });
-    // 제재건수 기준 (세그먼트별)
-    const segSanctioned = {};
-    allAbuseRows.forEach(a => {
-      if (!a.openid) return;
-      const abuse = allAbuseMap[a.openid];
-      if (!abuse) return;
-      if (abuse.action==="제재"||abuse.action==="제재+회수") {
-        segSanctioned[a.segment]=(segSanctioned[a.segment]||0)+1;
-      }
-    });
-    // 복구수/재제재수 (세그먼트별)
-    const segRecovered = {}, segResanctioned = {};
-    abuseUniqueOids.forEach(oid => {
-      const abuse = allAbuseMap[oid];
-      const sv = sheetOidMap[oid];
-      if (!abuse||!sv) return;
-      if (sv.status==="복구완료") segRecovered[abuse.segment]=(segRecovered[abuse.segment]||0)+1;
-      if (sv.status==="재제재") segResanctioned[abuse.segment]=(segResanctioned[abuse.segment]||0)+1;
-    });
 
-    // 6. 환불 금액 - OrderID 시트 기준 (amount 있는 행만)
-    const amountByCountry = { 한국:0, 일본:0, 기타:0 };
-    // UC보유정보 + OrderID 시트 모두에서 금액 합산 (중복 주문번호 제거)
-    const seenOrders = new Set();
-    allOrderRows.filter(d=>d.amount>0).forEach(d => {
-      const key = d.orderNo || d.openid + "_" + d.date;
-      if (seenOrders.has(key)) return;
-      seenOrders.add(key);
-      const krw = Math.abs(d.amount||0);
-      if (d.country==="한국") amountByCountry["한국"]+=krw;
-      else if (d.country==="일본") amountByCountry["일본"]+=krw;
-      else amountByCountry["기타"]+=krw;
-    });
+    const amountTotal = filtered.filter(d=>d.type==="UC보유정보")
+      .reduce((s,d) => s + Math.abs(d.amount||0), 0);
 
-    // 7. 유니크 유저 (UC보유정보 기준)
     const uniqueUsers = new Set(filtered.filter(d=>d.type==="UC보유정보").map(d=>d.openid).filter(Boolean)).size;
 
     return {
       totalOrders, uniqueUsers, totalAbuseUnique,
-      recovered: excelRecovered, sanctioned: excelSanctioned, excelBoth,
-      respRecovered, respResanctioned, respProcessing, totalResp,
-      segStats, segSanctioned, segRecovered, segResanctioned,
-      amountByCountry,
+      recovered: excelRecovered, sanctioned: excelSanctioned,
+      respRecovered, respResanctioned, respProcessing,
+      totalResp: totalAbuseUnique,
+      segStats, amountTotal,
     };
   }, [filtered, allAbuseRows, allAbuseMap, sheetOidMap]);
 
-  // ── 연도별 차트/테이블 ──
+  // ── 연도별 차트 ──
   const yearlyChart = useMemo(() => {
     const g = {};
-    // 주문건수: UC보유정보 기준 + segFilter 적용
-    allOrderRows.filter(d=>d.type==="UC보유정보"&&(segFilter==="전체"||d.segment===segFilter)).forEach(d => {
+    allOrderRows.filter(d=>d.type==="UC보유정보").forEach(d => {
       if (!d.year) return;
-      if (!g[d.year]) g[d.year] = { year:d.year, "Google·한국":0, "Google·일본":0, "iOS·한국":0, "iOS·일본":0, "기타":0 };
-      const k = `${d.platform}·${d.country}`;
-      if (g[d.year][k]!==undefined) g[d.year][k]++;
-      else g[d.year]["기타"]++;
-    });
-    // 연도 없는 경우도 초기화
-    allAbuseRows.forEach(a => {
-      // 악용자 연도는 UC보유정보에서 매칭
-      const uc = allOrderRows.find(d=>d.openid===a.openid&&d.type==="UC보유정보");
-      const year = uc?.year;
-      if (!year) return;
-      if (!g[year]) g[year] = { year, "Google·한국":0, "Google·일본":0, "iOS·한국":0, "iOS·일본":0, "기타":0 };
+      if (!g[d.year]) g[d.year] = { year:d.year, Google:0, iOS:0 };
+      g[d.year][d.platform] = (g[d.year][d.platform]||0) + 1;
     });
     return Object.values(g).sort((a,b)=>a.year.localeCompare(b.year));
-  }, [allOrderRows, allAbuseRows]);
+  }, [allOrderRows]);
 
-  // 연도별 제재/복구/재제재 통계 (악용자 리스트 기준 + segFilter 적용)
   const yearlyAbuseStats = useMemo(() => {
     const g = {};
-    allAbuseRows.filter(a => segFilter==="전체" || a.segment===segFilter).forEach(a => {
-      // 연도: UC보유정보에서 해당 OpenID의 연도 가져오기
+    allAbuseRows.forEach(a => {
       const uc = allOrderRows.find(d=>d.openid===a.openid&&d.type==="UC보유정보");
       const year = uc?.year;
       if (!year) return;
       if (!g[year]) g[year] = { sanctioned:0, recovered:0, resanctioned:0 };
-      // 제재건수
       if (a.action==="제재"||a.action==="제재+회수") g[year].sanctioned++;
-      // 복구수/재제재수: sheetOidMap 매칭
       const sv = sheetOidMap[a.openid];
       if (sv?.status==="복구완료") g[year].recovered++;
       else if (sv?.status==="재제재") g[year].resanctioned++;
     });
     return g;
-  }, [allAbuseRows, allOrderRows, sheetOidMap, segFilter]);
-
-  // yearlyChart도 segFilter 적용
-  
+  }, [allAbuseRows, allOrderRows, sheetOidMap]);
 
   const monthlyChart = useMemo(() => {
     const src = yearFilter==="전체" ? allOrderRows : filtered;
@@ -775,13 +774,12 @@ export default function App() {
     setChatLoading(true);
 
     const ctx = {
-      파일업로드: files.map(f=>({이름:f.name, 주문건수:f.orderRows.length, 악용자수:f.abuseRows.length})),
+      국가: country,
       전체주문건수: allOrderRows.length,
       유니크유저: stats.uniqueUsers,
-      연도별: Object.fromEntries(yearlyChart.map(d=>[d.year+"년", Object.entries(d).filter(([k])=>k!=="year").reduce((s,[,v])=>s+v,0)])),
-      세그먼트별: stats.segStats,
       악용자리스트: { 유니크OpenID:stats.totalAbuseUnique, 회수:stats.recovered, 제재:stats.sanctioned },
-      대응현황GoogleSheets: { 전체:stats.totalResp, 복구완료:stats.respRecovered, 재제재:stats.respResanctioned, 처리중:stats.respProcessing },
+      대응현황: { 복구완료:stats.respRecovered, 재제재:stats.respResanctioned, 처리중:stats.respProcessing },
+      연도별: Object.fromEntries(yearlyChart.map(d=>[d.year+"년", (d.Google||0)+(d.iOS||0)])),
     };
 
     try {
@@ -792,18 +790,8 @@ export default function App() {
           model:"claude-sonnet-4-20250514",
           max_tokens:1000,
           system:`당신은 PUBG Mobile 결제취소 악용자 대응 데이터 분석 어시스턴트입니다.
-현재 대시보드 데이터:
-${JSON.stringify(ctx,null,2)}
-
-데이터 설명:
-- 파일 업로드: 엑셀 파일 (주문번호 시트 + 악용자 리스트 시트)
-- 세그먼트: Google/iOS × 한국(KRW)/일본(JPY)/기타
-- 회수: UC잔액 있어서 회수 처리 (계정 유지)
-- 제재: UC 사용해서 계정 정지
-- 복구완료(Google Sheets): 재결제 후 계정 해제
-- 재제재(Google Sheets): 재결제 안해서 다시 정지
-- 처리중(Google Sheets): 아직 처리 안됨
-
+현재 대시보드: ${country} 전용
+데이터: ${JSON.stringify(ctx,null,2)}
 한국어로 간결하게 답변해주세요.`,
           messages:[...chatMessages.slice(1), {role:"user",content:msg}]
         })
@@ -814,43 +802,36 @@ ${JSON.stringify(ctx,null,2)}
       setChatMessages(prev=>[...prev,{role:"assistant",content:"오류: "+e.message}]);
     }
     setChatLoading(false);
-  }, [chatInput, chatLoading, chatMessages, files, allOrderRows, yearlyChart, stats]);
+  }, [chatInput, chatLoading, chatMessages, country, allOrderRows, stats, yearlyChart]);
 
   useEffect(()=>{ chatEndRef.current?.scrollIntoView({behavior:"smooth"}); },[chatMessages]);
 
-  // 실시간 환율 로드
   useEffect(() => {
     fetch("https://open.er-api.com/v6/latest/KRW")
-      .then(r => r.json())
-      .then(data => {
+      .then(r=>r.json()).then(data => {
         if (data.rates) {
-          const rates = { KRW: 1 };
-          Object.entries(data.rates).forEach(([cur, rate]) => {
-            rates[cur] = 1 / rate;
-          });
-          setExchangeRates(prev => ({...prev, ...rates}));
-          setRatesLoaded(true);
+          const rates = { KRW:1 };
+          Object.entries(data.rates).forEach(([cur,rate]) => { rates[cur] = 1/rate; });
+          setExchangeRates(prev=>({...prev,...rates}));
         }
-      })
-      .catch(() => {});
+      }).catch(()=>{});
   }, []);
 
-  // ── 유저 조회 ──
   // ── 유저 조회 ──
   const doSearch = () => {
     const q = searchQ.trim();
     if (!q) return;
     let searchOids = new Set();
-    allOrderRows.forEach(d => { if (d.openid && (d.openid.includes(q) || (d.orderNo && d.orderNo.includes(q)))) searchOids.add(d.openid); });
-    responseData.forEach(d => { if (d.openid && d.openid.includes(q)) searchOids.add(d.openid); });
-    if (searchOids.size === 0) searchOids.add(q);
+    allOrderRows.forEach(d => { if (d.openid&&(d.openid.includes(q)||(d.orderNo&&d.orderNo.includes(q)))) searchOids.add(d.openid); });
+    responseData.forEach(d => { if (d.openid&&d.openid.includes(q)) searchOids.add(d.openid); });
+    if (searchOids.size===0) searchOids.add(q);
     const oids = [...searchOids];
-    const orders = allOrderRows.filter(d => oids.some(oid => d.openid === oid)).sort((a,b)=>a.date.localeCompare(b.date));
-    const abuse = allAbuseRows.find(a => oids.some(oid => a.openid === oid));
-    const history = responseData.filter(d => oids.some(oid => d.openid === oid)).sort((a,b)=>a.date.localeCompare(b.date));
+    const orders = allOrderRows.filter(d=>oids.some(oid=>d.openid===oid)).sort((a,b)=>a.date.localeCompare(b.date));
+    const abuse = allAbuseRows.find(a=>oids.some(oid=>a.openid===oid));
+    const history = responseData.filter(d=>oids.some(oid=>d.openid===oid)).sort((a,b)=>a.date.localeCompare(b.date));
     const latestStatus = sheetOidMap[oids[0]] || null;
     const yearSummary = {};
-    orders.forEach(o => { if (!yearSummary[o.year]) yearSummary[o.year] = { count:0, platform:o.platform, country:o.country }; yearSummary[o.year].count++; });
+    orders.forEach(o => { if (!yearSummary[o.year]) yearSummary[o.year]={count:0,platform:o.platform,country:o.country}; yearSummary[o.year].count++; });
     setSearchRes({ q, orders, abuse, history, latestStatus, yearSummary, oids });
   };
 
@@ -867,7 +848,6 @@ ${JSON.stringify(ctx,null,2)}
           </button>
         ))}
       </div>
-      {/* 월 필터 */}
       {months.length > 2 && (
         <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
           {months.map(m=>(
@@ -881,7 +861,7 @@ ${JSON.stringify(ctx,null,2)}
       <select value={segFilter} onChange={e=>setSegFilter(e.target.value)}
         style={{padding:"5px 10px",borderRadius:8,border:"1px solid #1e3a5f",background:"#0d1b2e",color:"#c8d8f0",fontSize:11}}>
         <option>전체</option>
-        {Object.keys(SEG_COLORS).map(s=><option key={s}>{s}</option>)}
+        {Object.keys(SEG_COLORS).filter(s=>s.includes(country==="한국"?"한국":"일본")).map(s=><option key={s}>{s}</option>)}
       </select>
     </div>
   );
@@ -890,8 +870,10 @@ ${JSON.stringify(ctx,null,2)}
     <div style={{background:"#0d1b2e",borderRadius:14,padding:16,marginBottom:16,border:"1px solid #1e3a5f"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
         <div>
-          <div style={{fontSize:13,fontWeight:700,color:"#c8d8f0"}}>🔗 Google Sheets 실시간 연동</div>
-          <div style={{fontSize:11,color:"#2d4a6e",marginTop:2}}>결제취소악용자 대응현황 시트 4개 자동 로드</div>
+          <div style={{fontSize:13,fontWeight:700,color:"#c8d8f0"}}>🔗 Google Sheets 실시간 연동 ({country})</div>
+          <div style={{fontSize:11,color:"#2d4a6e",marginTop:2}}>
+            {country} 대응현황 시트 {(GSHEET_TARGETS[country]||[]).length}개 자동 로드
+          </div>
         </div>
         {lastFetch&&<span style={{fontSize:11,color:"#22c55e"}}>✅ {lastFetch} 갱신</span>}
       </div>
@@ -900,7 +882,7 @@ ${JSON.stringify(ctx,null,2)}
           style={{padding:"9px 20px",borderRadius:9,border:"none",background:sheetLoading?"#1e3a5f":"#1d4ed8",color:"#fff",cursor:sheetLoading?"wait":"pointer",fontWeight:700,fontSize:13}}>
           {sheetLoading?"⏳ 불러오는 중...":responseData.length?"🔄 새로고침":"📡 대응현황 불러오기"}
         </button>
-        {GSHEET_TARGETS.map((t,i)=>(
+        {(GSHEET_TARGETS[country]||[]).map((t,i)=>(
           <span key={i} style={{fontSize:10,padding:"3px 8px",borderRadius:4,background:"#060d18",color:"#2d4a6e"}}>{t.label}</span>
         ))}
       </div>
@@ -920,145 +902,90 @@ ${JSON.stringify(ctx,null,2)}
   return (
     <div style={{fontFamily:"'Pretendard','Apple SD Gothic Neo',sans-serif",background:"#060d18",minHeight:"100vh",color:"#c8d8f0",padding:18}}>
       {toast && (
-        <div style={{position:"fixed",bottom:32,left:"50%",transform:"translateX(-50%)",zIndex:9999,
-          background:toast.color,color:"#fff",padding:"14px 28px",borderRadius:14,
-          fontWeight:700,fontSize:13,boxShadow:"0 4px 24px rgba(0,0,0,0.6)",
-          whiteSpace:"nowrap",maxWidth:"90vw",overflow:"hidden",textOverflow:"ellipsis"}}>
+        <div style={{position:"fixed",bottom:32,left:"50%",transform:"translateX(-50%)",zIndex:9999,background:toast.color,color:"#fff",padding:"14px 28px",borderRadius:14,fontWeight:700,fontSize:13,boxShadow:"0 4px 24px rgba(0,0,0,0.6)",whiteSpace:"nowrap"}}>
           {toast.msg}
         </div>
       )}
 
       {/* 헤더 */}
       <div style={{marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
-        <div>
-          <h1 style={{fontSize:20,fontWeight:800,color:"#e8f4ff",margin:0,letterSpacing:"-0.03em"}}>🎮 결제취소 악용자 대응현황</h1>
-          <p style={{color:"#2d4a6e",fontSize:11,margin:"4px 0 0"}}>Google Play · iOS · 한국 · 일본 · 2018~현재</p>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          {/* 국가 선택으로 돌아가기 */}
+          <button onClick={onBack}
+            style={{padding:"6px 14px",borderRadius:8,border:"1px solid #1e3a5f",background:"#0d1b2e",color:"#4a6fa5",fontSize:11,cursor:"pointer",fontFamily:"inherit",transition:"all 0.2s"}}
+            onMouseEnter={e=>{e.currentTarget.style.borderColor="#4a6fa5";e.currentTarget.style.color="#c8d8f0";}}
+            onMouseLeave={e=>{e.currentTarget.style.borderColor="#1e3a5f";e.currentTarget.style.color="#4a6fa5";}}>
+            ← 국가 선택
+          </button>
+          {/* 국가 배지 */}
+          <div style={{display:"flex",alignItems:"center",gap:6,padding:"5px 14px",borderRadius:20,background:`${countryColor}18`,border:`1px solid ${countryColor}44`,fontSize:13,fontWeight:700,color:countryColor}}>
+            {countryFlag} {country}
+          </div>
+          <div>
+            <h1 style={{fontSize:18,fontWeight:800,color:"#e8f4ff",margin:0,letterSpacing:"-0.03em"}}>🎮 결제취소 악용자 대응현황</h1>
+            <p style={{color:"#2d4a6e",fontSize:11,margin:"3px 0 0"}}>Google Play · iOS · 2018~현재</p>
+          </div>
         </div>
         <div style={{display:"flex",gap:6,fontSize:11,flexWrap:"wrap"}}>
           <span style={{padding:"3px 10px",borderRadius:20,background:hasData?"#14532d":"#0d1b2e",color:hasData?"#22c55e":"#2d4a6e",border:"1px solid #1e3a5f"}}>
-            📁 {hasData?`${fmt(rawOrderRows.length)}건 로드됨`:"파일 미업로드"}
+            📁 {hasData?`${fmt(rawOrderRows.length)}건 (${country})`:"데이터 없음"}
           </span>
           <span style={{padding:"3px 10px",borderRadius:20,background:hasResp?"#14532d":"#0d1b2e",color:hasResp?"#22c55e":"#2d4a6e",border:"1px solid #1e3a5f"}}>
-            📊 {hasResp?`대응현황 ${fmt(filteredResponseData.length)}건 (전체 ${fmt(responseData.length)}건)`:"대응현황 미로드"}
+            📊 {hasResp?`대응현황 ${fmt(filteredResponseData.length)}건`:"대응현황 미로드"}
           </span>
         </div>
       </div>
 
-      {/* ━━━ 레벨1: Google / iOS 큰 탭 ━━━ */}
-      <div style={{display:"flex",gap:0,marginBottom:0,borderBottom:"2px solid #1e3a5f",marginTop:4}}>
+      {/* 플랫폼 탭 */}
+      <div style={{display:"flex",gap:0,marginBottom:0,borderBottom:`2px solid #1e3a5f`}}>
         {[["Google","🤖 Google Play","#3b82f6"],["iOS","🍎 iOS","#a855f7"]].map(([key,label,color])=>(
-          <button key={key} onClick={()=>{ setMarketTab(key); setCountryTab("전체"); setCsStatusTab(""); }}
-            style={{padding:"13px 32px",background:marketTab===key?color+"11":"transparent",
-              color:marketTab===key?color:"#2d4a6e",fontWeight:800,fontSize:14,border:"none",
-              borderBottom:`3px solid ${marketTab===key?color:"transparent"}`,marginBottom:-2,
-              cursor:"pointer",transition:"all 0.2s"}}>
+          <button key={key} onClick={()=>{ setMarketTab(key); setCsStatusTab(""); }}
+            style={{padding:"12px 28px",background:marketTab===key?color+"11":"transparent",color:marketTab===key?color:"#2d4a6e",fontWeight:800,fontSize:14,border:"none",borderBottom:`3px solid ${marketTab===key?color:"transparent"}`,marginBottom:-2,cursor:"pointer",transition:"all 0.2s"}}>
             {label}
           </button>
         ))}
-      </div>
-
-      {/* ━━━ 레벨2: 전체 / 한국 / 일본 탭 ━━━ */}
-      <div style={{display:"flex",gap:6,padding:"10px 0",marginBottom:12,borderBottom:"1px solid #0a1220"}}>
-        {[["전체","🌏 전체","#1d4ed8"],["한국","🇰🇷 한국","#0891b2"],["일본","🇯🇵 일본","#d97706"]].map(([key,label,color])=>(
-          <button key={key} onClick={()=>{ setCountryTab(key); setCsStatusTab(""); }}
-            style={{padding:"6px 18px",borderRadius:20,border:`1px solid ${countryTab===key?color:"#1e3a5f"}`,
-              background:countryTab===key?color:"transparent",color:countryTab===key?"#fff":"#4a6fa5",
-              fontWeight:700,fontSize:12,cursor:"pointer",transition:"all 0.2s"}}>
-            {label}
-          </button>
-        ))}
-        {/* 현재 컨텍스트 표시 */}
-        <span style={{marginLeft:"auto",fontSize:11,color:"#2d4a6e",alignSelf:"center"}}>
-          {marketTab==="Google"?"🤖":"🍎"} {marketTab} · {countryTab}
+        <span style={{marginLeft:"auto",fontSize:11,color:"#2d4a6e",alignSelf:"center",paddingRight:8}}>
+          {countryFlag} {country} · {marketTab}
         </span>
       </div>
 
-      {/* 파일 업로드 — 1개 또는 2개 */}
-      <div style={{background:"#0d1b2e",borderRadius:14,padding:16,marginBottom:16,border:"1px solid #1e3a5f"}}>
-        <div style={{fontSize:13,fontWeight:700,color:"#c8d8f0",marginBottom:10}}>📁 엑셀 파일 업로드</div>
-        <div style={{fontSize:11,color:"#2d4a6e",marginBottom:12}}>
-          {marketTab==="Google" ? "Google AOS 파일" : "iOS 파일"} 업로드 — <span style={{color:marketTab==="Google"?"#3b82f6":"#a855f7"}}>{marketTab==="Google"?"결제취소 악용 대상자 OrderID":"ios 환불악용 유저 리스트"}</span> 시트 포함 파일
-        </div>
-
-        {/* 업로드된 파일 목록 */}
-        {files.length > 0 && (
-          <div style={{marginBottom:12,display:"flex",gap:8,flexWrap:"wrap"}}>
-            {files.map((f,i)=>(
-              <div key={i} style={{background:"#060d18",borderRadius:10,padding:"8px 14px",border:"1px solid #22c55e44",display:"flex",alignItems:"center",gap:8}}>
-                <span style={{fontSize:11,color:"#22c55e"}}>✅ {f.name}</span>
-                <span style={{fontSize:10,color:"#2d4a6e"}}>주문 {fmt(f.orderRows.length)}건 · 악용자 {fmt(f.abuseRows.length)}명</span>
-                <button onClick={()=>setFiles(prev=>prev.filter((_,j)=>j!==i))}
-                  style={{background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:11,padding:0}}>✕</button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div
-          onClick={()=>{const i=document.createElement("input");i.type="file";i.accept=".xlsx,.xls";i.multiple=true;i.onchange=e=>[...e.target.files].forEach(handleFile);i.click();}}
-          onDrop={e=>{e.preventDefault();[...e.dataTransfer.files].forEach(handleFile);}}
-          onDragOver={e=>e.preventDefault()}
-          style={{border:"2px dashed #1e3a5f",borderRadius:10,padding:"20px",textAlign:"center",cursor:"pointer"}}>
-          <div style={{fontSize:24,marginBottom:6}}>📂</div>
-          <div style={{fontSize:13,color:"#4a6fa5",fontWeight:600}}>클릭 또는 드래그하여 업로드</div>
-          <div style={{fontSize:11,color:"#1e3a5f",marginTop:4}}>Google AOS 파일, iOS 파일 각각 또는 한번에 업로드</div>
-        </div>
-
-        {uploadLog.length > 0 && (
-          <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:10}}>
-            {uploadLog.map((l,i)=>(
-              <span key={i} style={{fontSize:10,padding:"3px 8px",borderRadius:4,background:"#14532d",color:"#22c55e"}}>
-                ✅ {l.sheet} ({l.type}: {l.count}건)
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* 탭 */}
-      <div style={{display:"flex",gap:2,marginBottom:18,background:"#0a1628",borderRadius:12,padding:4,width:"fit-content",flexWrap:"wrap"}}>
+      {/* 서브 탭 */}
+      <div style={{display:"flex",gap:2,margin:"14px 0",background:"#0a1628",borderRadius:12,padding:4,width:"fit-content",flexWrap:"wrap"}}>
         {TABS.map(t=>(
           <button key={t} onClick={()=>setTab(t)}
-            style={{padding:"7px 15px",border:"none",borderRadius:9,fontSize:12,fontWeight:700,cursor:"pointer",background:tab===t?"#1d4ed8":"transparent",color:tab===t?"#fff":"#2d4a6e"}}>
+            style={{padding:"7px 14px",border:"none",borderRadius:9,fontSize:12,fontWeight:700,cursor:"pointer",background:tab===t?"#1d4ed8":"transparent",color:tab===t?"#fff":"#2d4a6e"}}>
             {t}
           </button>
         ))}
       </div>
 
-      {/* ━━━ 전체 현황 ━━━ */}
+      {/* ━━━ 마켓 환불 현황 ━━━ */}
       {tab==="마켓 환불 현황" && (<>
         <FilterBar/>
         {!hasData ? (
           <div style={{background:"#0d1b2e",borderRadius:14,padding:40,textAlign:"center",color:"#2d4a6e",fontSize:13,border:"1px dashed #1e3a5f"}}>
-            위에서 엑셀 파일을 업로드하면 현황이 표시됩니다.
+            {country} 데이터가 없습니다. 파일을 다시 확인해주세요.
           </div>
         ) : (<>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:16}}>
             <Card icon="📋" label="총 환불 주문" value={fmt(stats.totalOrders)} sub="건수 기준" color="#3b82f6"/>
-
-            <Card icon="🔄" label="회수 처리" value={fmt(stats.recovered)}
-              sub={`${stats.totalAbuseUnique?Math.round(stats.recovered/stats.totalAbuseUnique*100):0}% (${fmt(stats.totalAbuseUnique)}명 중)`} color="#22d3ee"/>
-            <Card icon="🚫" label="제재 처리" value={fmt(stats.sanctioned)}
-              sub={`${stats.totalAbuseUnique?Math.round(stats.sanctioned/stats.totalAbuseUnique*100):0}% (${fmt(stats.totalAbuseUnique)}명 중)`} color="#ef4444"/>
-            <Card icon="💰" label="한국 환불금액" value={`₩${fmt(Math.round(stats.amountByCountry?.한국||0))}`} sub="KRW" color="#f59e0b"/>
-            <Card icon="💴" label="일본 환불금액" value={`¥${fmt(Math.round((stats.amountByCountry?.일본||0)))}`} sub="JPY→KRW환산" color="#06b6d4"/>
+            <Card icon="👤" label="유니크 유저" value={fmt(stats.uniqueUsers)} sub="명" color={countryColor}/>
+            <Card icon="🔄" label="회수 처리" value={fmt(stats.recovered)} sub={`${stats.totalAbuseUnique?Math.round(stats.recovered/stats.totalAbuseUnique*100):0}%`} color="#22d3ee"/>
+            <Card icon="🚫" label="제재 처리" value={fmt(stats.sanctioned)} sub={`${stats.totalAbuseUnique?Math.round(stats.sanctioned/stats.totalAbuseUnique*100):0}%`} color="#ef4444"/>
+            <Card icon={country==="한국"?"💰":"💴"} label="환불 금액" value={`${currencySymbol}${fmt(Math.round(stats.amountTotal))}`} sub={country==="한국"?"KRW":"JPY"} color="#f59e0b"/>
           </div>
 
           <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12,marginBottom:12}}>
             <div style={{background:"#0d1b2e",borderRadius:14,padding:18,border:"1px solid #1e3a5f"}}>
-              <div style={{fontSize:13,color:"#4a6fa5",fontWeight:600,marginBottom:14}}>연도별 환불 추이</div>
+              <div style={{fontSize:13,color:"#4a6fa5",fontWeight:600,marginBottom:14}}>연도별 환불 추이 ({country})</div>
               <ResponsiveContainer width="100%" height={220}>
                 <BarChart data={yearlyChart}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#0a1220"/>
                   <XAxis dataKey="year" tick={{fill:"#2d4a6e",fontSize:10}}/>
                   <YAxis tick={{fill:"#2d4a6e",fontSize:10}}/>
-                  <Tooltip {...TT}/>
-                  <Legend wrapperStyle={{fontSize:11}}/>
-                  <Bar dataKey="Google·한국" fill="#3b82f6" stackId="a" radius={[3,3,0,0]}/>
-                  <Bar dataKey="Google·일본" fill="#06b6d4" stackId="a"/>
-                  <Bar dataKey="iOS·한국" fill="#a855f7" stackId="a"/>
-                  <Bar dataKey="iOS·일본" fill="#ec4899" stackId="a"/>
-                  <Bar dataKey="기타" fill="#475569" stackId="a"/>
+                  <Tooltip {...TT}/><Legend wrapperStyle={{fontSize:11}}/>
+                  <Bar dataKey="Google" fill="#3b82f6" stackId="a" radius={[3,3,0,0]}/>
+                  <Bar dataKey="iOS" fill="#a855f7" stackId="a"/>
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -1075,36 +1002,26 @@ ${JSON.stringify(ctx,null,2)}
               ))}
             </div>
           </div>
-
-
         </>)}
       </>)}
 
       {/* ━━━ 연도별 분석 ━━━ */}
       {tab==="연도별 분석" && (<>
         <FilterBar/>
-        {!hasData ? <div style={{background:"#0d1b2e",borderRadius:14,padding:40,textAlign:"center",color:"#2d4a6e",fontSize:13}}>파일을 먼저 업로드해주세요.</div> : (<>
+        {!hasData ? <div style={{background:"#0d1b2e",borderRadius:14,padding:40,textAlign:"center",color:"#2d4a6e",fontSize:13}}>데이터가 없습니다.</div> : (<>
           <div style={{background:"#0d1b2e",borderRadius:14,padding:18,border:"1px solid #1e3a5f",marginBottom:12}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-              <div style={{fontSize:13,color:"#4a6fa5",fontWeight:600}}>연도별 현황 테이블</div>
+              <div style={{fontSize:13,color:"#4a6fa5",fontWeight:600}}>연도별 현황 테이블 ({country})</div>
               <button onClick={()=>{
                 const rows = yearlyChart.map(row => {
                   const yas = yearlyAbuseStats[row.year]||{sanctioned:0,recovered:0,resanctioned:0};
-                  const orders = (row["Google·한국"]||0)+(row["Google·일본"]||0)+(row["iOS·한국"]||0)+(row["iOS·일본"]||0)+(row["기타"]||0);
-                  return {
-                    "연도": row.year+"년",
-                    "주문건수": orders,
-                    "제재건수": yas.sanctioned,
-                    "복구수": yas.recovered,
-                    "복구율": yas.sanctioned?Math.round(yas.recovered/yas.sanctioned*100)+"%":"0%",
-                    "재제재수": yas.resanctioned,
-                    "재제재율": yas.sanctioned?Math.round(yas.resanctioned/yas.sanctioned*100)+"%":"0%",
-                  };
+                  const orders = (row.Google||0)+(row.iOS||0);
+                  return { "연도":row.year+"년", "주문건수":orders, "제재건수":yas.sanctioned, "복구수":yas.recovered, "복구율":yas.sanctioned?Math.round(yas.recovered/yas.sanctioned*100)+"%":"0%", "재제재수":yas.resanctioned, "재제재율":yas.sanctioned?Math.round(yas.resanctioned/yas.sanctioned*100)+"%":"0%" };
                 });
                 const ws = XLSX.utils.json_to_sheet(rows);
                 const wb2 = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(wb2, ws, "연도별분석");
-                XLSX.writeFile(wb2, `연도별분석_${new Date().toISOString().slice(0,10)}.xlsx`);
+                XLSX.writeFile(wb2, `${country}_연도별분석_${new Date().toISOString().slice(0,10)}.xlsx`);
               }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:"#16a34a",color:"#fff",cursor:"pointer",fontWeight:700,fontSize:12}}>
                 📥 엑셀 다운로드
               </button>
@@ -1113,12 +1030,7 @@ ${JSON.stringify(ctx,null,2)}
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
                 <thead>
                   <tr style={{background:"#060d18",borderBottom:"1px solid #1e3a5f"}}>
-                    {[
-                      {label:"연도",color:"#2d4a6e"},
-                      {label:"주문건수",color:"#3b82f6"},{label:"제재건수",color:"#ef4444"},
-                      {label:"복구수",color:"#22c55e"},{label:"복구율",color:"#22c55e"},
-                      {label:"재제재수",color:"#f59e0b"},{label:"재제재율",color:"#f59e0b"},
-                    ].map(({label,color})=>(
+                    {[{label:"연도",color:"#2d4a6e"},{label:"주문건수",color:"#3b82f6"},{label:"제재건수",color:"#ef4444"},{label:"복구수",color:"#22c55e"},{label:"복구율",color:"#22c55e"},{label:"재제재수",color:"#f59e0b"},{label:"재제재율",color:"#f59e0b"}].map(({label,color})=>(
                       <th key={label} style={{padding:"8px 10px",textAlign:"center",color,fontWeight:600,whiteSpace:"nowrap"}}>{label}</th>
                     ))}
                   </tr>
@@ -1126,13 +1038,13 @@ ${JSON.stringify(ctx,null,2)}
                 <tbody>
                   {yearlyChart.map((row,i)=>{
                     const yas = yearlyAbuseStats[row.year]||{sanctioned:0,recovered:0,resanctioned:0};
-                    const orders = (row["Google·한국"]||0)+(row["Google·일본"]||0)+(row["iOS·한국"]||0)+(row["iOS·일본"]||0)+(row["기타"]||0);
+                    const orders = (row.Google||0)+(row.iOS||0);
                     const recRate = yas.sanctioned?Math.round(yas.recovered/yas.sanctioned*100):0;
                     const resRate = yas.sanctioned?Math.round(yas.resanctioned/yas.sanctioned*100):0;
                     return (
-                      <tr key={i} style={{borderBottom:"1px solid #0a1220",background:yearFilter===row.year?"#0a1528":"transparent"}}
+                      <tr key={i} style={{borderBottom:"1px solid #0a1220"}}
                         onMouseEnter={e=>e.currentTarget.style.background="#0a1528"}
-                        onMouseLeave={e=>e.currentTarget.style.background=yearFilter===row.year?"#0a1528":"transparent"}>
+                        onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                         <td style={{padding:"8px 10px",fontWeight:700,color:"#e8f4ff",textAlign:"center"}}>{row.year}년</td>
                         <td style={{padding:"7px 10px",color:"#3b82f6",textAlign:"center",fontWeight:700}}>{fmt(orders)}</td>
                         <td style={{padding:"7px 10px",color:"#ef4444",textAlign:"center",fontWeight:700}}>{fmt(yas.sanctioned)}</td>
@@ -1143,9 +1055,8 @@ ${JSON.stringify(ctx,null,2)}
                       </tr>
                     );
                   })}
-                  {/* 합계 행 */}
                   {(()=>{
-                    const totOrders = yearlyChart.reduce((s,r)=>s+(r["Google·한국"]||0)+(r["Google·일본"]||0)+(r["iOS·한국"]||0)+(r["iOS·일본"]||0)+(r["기타"]||0),0);
+                    const totOrders = yearlyChart.reduce((s,r)=>s+(r.Google||0)+(r.iOS||0),0);
                     const totSanc = Object.values(yearlyAbuseStats).reduce((s,v)=>s+v.sanctioned,0);
                     const totRec = Object.values(yearlyAbuseStats).reduce((s,v)=>s+v.recovered,0);
                     const totRes = Object.values(yearlyAbuseStats).reduce((s,v)=>s+v.resanctioned,0);
@@ -1184,58 +1095,36 @@ ${JSON.stringify(ctx,null,2)}
       {/* ━━━ 세그먼트 ━━━ */}
       {tab==="세그먼트" && (<>
         <FilterBar/>
-        {!hasData ? <div style={{background:"#0d1b2e",borderRadius:14,padding:40,textAlign:"center",color:"#2d4a6e",fontSize:13}}>파일을 먼저 업로드해주세요.</div> : (
+        {!hasData ? <div style={{background:"#0d1b2e",borderRadius:14,padding:40,textAlign:"center",color:"#2d4a6e",fontSize:13}}>데이터가 없습니다.</div> : (
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:12}}>
-            {Object.entries(SEG_COLORS).map(([seg,color])=>{
-              const [platform,country] = seg.split("_");
-              const orders = filtered.filter(d=>d.segment===seg);
-              // 악용자 리스트 B열 기준 유니크 OpenID (해당 세그먼트)
-              const abuseInSeg = allAbuseRows.filter(a=>a.segment===seg);
-              const abuseUniqueOids = [...new Set(abuseInSeg.map(a=>a.openid).filter(Boolean))];
-              const uniqueUsers = abuseUniqueOids.length;
-              // G열 텍스트 기준 회수/제재
-              let recovered = 0, sanctioned = 0;
-              abuseUniqueOids.forEach(oid => {
-                const a = allAbuseMap[oid];
-                if (!a) return;
-                if (a.action === "회수" || a.action === "제재+회수") recovered++;
-                if (a.action === "제재" || a.action === "제재+회수") sanctioned++;
-              });
-              const abuse = abuseInSeg;
-              return (
-                <div key={seg} style={{background:"#0d1b2e",borderRadius:14,padding:18,border:`1px solid ${color}33`,borderTop:`3px solid ${color}`}}>
-                  <div style={{fontSize:14,fontWeight:800,color,marginBottom:14}}>
-                    {platform==="Google"?"🤖":"🍎"} {platform} · {country}
+            {Object.entries(SEG_COLORS)
+              .filter(([seg]) => seg.includes(country==="한국"?"한국":"일본"))
+              .map(([seg,color])=>{
+                const [platform] = seg.split("_");
+                const orders = filtered.filter(d=>d.segment===seg);
+                const abuseInSeg = allAbuseRows.filter(a=>a.segment===seg);
+                const abuseUniqueOids = [...new Set(abuseInSeg.map(a=>a.openid).filter(Boolean))];
+                let recovered = 0, sanctioned = 0;
+                abuseUniqueOids.forEach(oid => {
+                  const a = allAbuseMap[oid];
+                  if (!a) return;
+                  if (a.action==="회수"||a.action==="제재+회수") recovered++;
+                  if (a.action==="제재"||a.action==="제재+회수") sanctioned++;
+                });
+                return (
+                  <div key={seg} style={{background:"#0d1b2e",borderRadius:14,padding:18,border:`1px solid ${color}33`,borderTop:`3px solid ${color}`}}>
+                    <div style={{fontSize:14,fontWeight:800,color,marginBottom:14}}>
+                      {platform==="Google"?"🤖":"🍎"} {platform} · {country}
+                    </div>
+                    {[["환불 주문",fmt(orders.length)+"건","#c8d8f0"],["회수 처리",fmt(recovered)+"명","#22d3ee"],["제재 처리",fmt(sanctioned)+"명","#ef4444"]].map(([l,v,c])=>(
+                      <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid #0a1220"}}>
+                        <span style={{fontSize:12,color:"#2d4a6e"}}>{l}</span>
+                        <span style={{fontSize:13,fontWeight:700,color:c}}>{v}</span>
+                      </div>
+                    ))}
                   </div>
-                  {[
-                    ["환불 주문",fmt(orders.length)+"건","#c8d8f0"],
-
-                    ["회수 처리",fmt(recovered)+"명","#22d3ee"],
-                    ["제재 처리",fmt(sanctioned)+"명","#ef4444"],
-                  ].map(([l,v,c])=>(
-                    <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid #0a1220"}}>
-                      <span style={{fontSize:12,color:"#2d4a6e"}}>{l}</span>
-                      <span style={{fontSize:13,fontWeight:700,color:c}}>{v}</span>
-                    </div>
-                  ))}
-                  {abuse.length>0&&(
-                    <div style={{marginTop:12}}>
-                      {[["회수",recovered,"#22d3ee"],["제재",sanctioned,"#ef4444"]].map(([l,v,c])=>(
-                        <div key={l} style={{marginBottom:6}}>
-                          <div style={{display:"flex",justifyContent:"space-between",fontSize:10,marginBottom:2}}>
-                            <span style={{color:"#2d4a6e"}}>{l}</span>
-                            <span style={{color:c}}>{abuse.length?Math.round(v/abuse.length*100):0}%</span>
-                          </div>
-                          <div style={{background:"#0a1220",borderRadius:4,height:5}}>
-                            <div style={{width:`${abuse.length?Math.round(v/abuse.length*100):0}%`,height:"100%",background:c,borderRadius:4}}/>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                );
+              })}
           </div>
         )}
       </>)}
@@ -1246,10 +1135,9 @@ ${JSON.stringify(ctx,null,2)}
         <FilterBar/>
         {!hasResp ? (
           <div style={{background:"#0d1b2e",borderRadius:14,padding:40,textAlign:"center",color:"#2d4a6e",fontSize:13,border:"1px dashed #1e3a5f"}}>
-            위 버튼으로 Google Sheets 데이터를 불러오세요.
+            위 버튼으로 {country} Google Sheets 데이터를 불러오세요.
           </div>
         ) : (<>
-          {/* 요약 카드 */}
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10,marginBottom:14}}>
             <Card icon="📋" label="총 대응건수" value={fmt(filteredResp.length)} sub="행 기준" color="#3b82f6"/>
             <Card icon="✅" label="복구 완료" value={fmt(stats.respRecovered)} sub={`${stats.totalResp?Math.round(stats.respRecovered/stats.totalResp*100):0}%`} color="#22c55e"/>
@@ -1257,27 +1145,22 @@ ${JSON.stringify(ctx,null,2)}
             <Card icon="⏳" label="처리중" value={fmt(stats.respProcessing)} sub={`${stats.totalResp?Math.round(stats.respProcessing/stats.totalResp*100):0}%`} color="#f59e0b"/>
           </div>
 
-          {/* 상태별 탭 버튼 */}
           <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
             {[["복구완료","#22c55e"],["재제재","#ef4444"],["처리중","#f59e0b"]].map(([s,c])=>{
-              const cnt = s==="복구완료" ? stats.respRecovered : s==="재제재" ? stats.respResanctioned : stats.respProcessing;
+              const cnt = s==="복구완료"?stats.respRecovered:s==="재제재"?stats.respResanctioned:stats.respProcessing;
               return (
                 <button key={s} onClick={()=>setCsStatusTab(csStatusTab===s?"":s)}
-                  style={{padding:"10px 22px",borderRadius:10,border:`2px solid ${csStatusTab===s?c:"#1e3a5f"}`,
-                    background:csStatusTab===s?c+"22":"#0d1b2e",color:csStatusTab===s?c:"#4a6fa5",
-                    fontWeight:700,fontSize:12,cursor:"pointer",transition:"all 0.2s"}}>
+                  style={{padding:"10px 22px",borderRadius:10,border:`2px solid ${csStatusTab===s?c:"#1e3a5f"}`,background:csStatusTab===s?c+"22":"#0d1b2e",color:csStatusTab===s?c:"#4a6fa5",fontWeight:700,fontSize:12,cursor:"pointer"}}>
                   {s==="복구완료"?"✅":s==="재제재"?"🚫":"⏳"} {s} ({fmt(cnt)})
                 </button>
               );
             })}
           </div>
 
-          {/* 탭 클릭시 OpenID 목록 표시 */}
           {csStatusTab && (()=>{
             const c = csStatusTab==="복구완료"?"#22c55e":csStatusTab==="재제재"?"#ef4444":"#f59e0b";
-            const oids = Object.entries(sheetOidMap).filter(([oid,v])=>{
+            const oids = Object.entries(sheetOidMap).filter(([,v])=>{
               if(yearFilter!=="전체"&&v.lastDate?.slice(0,4)!==yearFilter) return false;
-              if(segFilter!=="전체"&&getSeg(v.platform,v.country)!==segFilter) return false;
               return v.status===csStatusTab;
             });
             return (
@@ -1286,7 +1169,6 @@ ${JSON.stringify(ctx,null,2)}
                   <div style={{fontSize:13,fontWeight:700,color:c}}>
                     {csStatusTab==="복구완료"?"✅":csStatusTab==="재제재"?"🚫":"⏳"} {csStatusTab} 유저 목록
                     <span style={{fontSize:11,color:"#4a6fa5",marginLeft:8}}>총 {fmt(oids.length)}명</span>
-                    {csStatusTab==="처리중"&&<span style={{fontSize:11,color:"#f59e0b",marginLeft:8}}>⚠️ 아직 처리되지 않은 유저</span>}
                   </div>
                   <button onClick={()=>setCsStatusTab("")} style={{background:"none",border:"none",color:"#4a6fa5",cursor:"pointer",fontSize:18}}>✕</button>
                 </div>
@@ -1294,32 +1176,23 @@ ${JSON.stringify(ctx,null,2)}
                   <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
                     <thead style={{position:"sticky",top:0,background:"#060d18",zIndex:1}}>
                       <tr style={{borderBottom:"1px solid #1e3a5f"}}>
-                        {["#","OpenID","플랫폼","국가","최종처리일","악용횟수","누적UC","현재UC"].map(h=>(
-                          <th key={h} style={{padding:"8px 10px",textAlign:"left",color:"#2d4a6e",fontWeight:600,whiteSpace:"nowrap"}}>{h}</th>
+                        {["#","OpenID","플랫폼","최종처리일"].map(h=>(
+                          <th key={h} style={{padding:"8px 10px",textAlign:"left",color:"#2d4a6e",fontWeight:600}}>{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {oids.map(([oid,v],i)=>{
-                        const abuse = allAbuseMap[oid];
-                        const oidInfo = allOidInfo[oid] || {};
-                        return (
-                          <tr key={oid}
-                            style={{borderBottom:"1px solid #0a1220",cursor:"pointer",background:"transparent"}}
-                            onMouseEnter={e=>e.currentTarget.style.background="#0a1528"}
-                            onMouseLeave={e=>e.currentTarget.style.background="transparent"}
-                            onClick={()=>{ setSearchQ(oid); setTab("유저 조회"); setTimeout(()=>doSearch(),100); }}>
-                            <td style={{padding:"7px 10px",color:"#2d4a6e"}}>{i+1}</td>
-                            <td style={{padding:"7px 10px",color:"#c8d8f0",fontFamily:"monospace",fontSize:10}}>{oid}</td>
-                            <td style={{padding:"7px 10px",color:"#4a6fa5"}}>{v.platform}</td>
-                            <td style={{padding:"7px 10px",color:"#4a6fa5"}}>{v.country}</td>
-                            <td style={{padding:"7px 10px",color:"#2d4a6e",whiteSpace:"nowrap"}}>{v.lastDate}</td>
-                            <td style={{padding:"7px 10px",color:"#f59e0b",textAlign:"center"}}>{fmt(oidInfo.abuseCount||0)}</td>
-                            <td style={{padding:"7px 10px",color:"#3b82f6",textAlign:"right"}}>{fmt(oidInfo.totalUC||0)}</td>
-                            <td style={{padding:"7px 10px",color:"#22c55e",textAlign:"right"}}>{fmt(oidInfo.currentUC||0)}</td>
-                          </tr>
-                        );
-                      })}
+                      {oids.map(([oid,v],i)=>(
+                        <tr key={oid} style={{borderBottom:"1px solid #0a1220",cursor:"pointer"}}
+                          onMouseEnter={e=>e.currentTarget.style.background="#0a1528"}
+                          onMouseLeave={e=>e.currentTarget.style.background="transparent"}
+                          onClick={()=>{ setSearchQ(oid); setTab("유저 조회"); setTimeout(()=>doSearch(),100); }}>
+                          <td style={{padding:"7px 10px",color:"#2d4a6e"}}>{i+1}</td>
+                          <td style={{padding:"7px 10px",color:"#c8d8f0",fontFamily:"monospace",fontSize:10}}>{oid}</td>
+                          <td style={{padding:"7px 10px",color:"#4a6fa5"}}>{v.platform}</td>
+                          <td style={{padding:"7px 10px",color:"#2d4a6e"}}>{v.lastDate}</td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>
@@ -1327,7 +1200,6 @@ ${JSON.stringify(ctx,null,2)}
             );
           })()}
 
-          {/* 차트 */}
           <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12}}>
             <div style={{background:"#0d1b2e",borderRadius:14,padding:18,border:"1px solid #1e3a5f"}}>
               <div style={{fontSize:13,color:"#4a6fa5",fontWeight:600,marginBottom:14}}>월별 대응현황 추이</div>
@@ -1347,9 +1219,8 @@ ${JSON.stringify(ctx,null,2)}
               <div style={{fontSize:13,color:"#4a6fa5",fontWeight:600,marginBottom:14}}>처리 결과 비율</div>
               <ResponsiveContainer width="100%" height={160}>
                 <PieChart>
-                  <Pie data={[
-                    {name:"복구완료",value:stats.respRecovered},{name:"재제재",value:stats.respResanctioned},{name:"처리중",value:stats.respProcessing},
-                  ].filter(d=>d.value>0)} cx="50%" cy="50%" innerRadius={45} outerRadius={65} dataKey="value" paddingAngle={3}>
+                  <Pie data={[{name:"복구완료",value:stats.respRecovered},{name:"재제재",value:stats.respResanctioned},{name:"처리중",value:stats.respProcessing}].filter(d=>d.value>0)}
+                    cx="50%" cy="50%" innerRadius={45} outerRadius={65} dataKey="value" paddingAngle={3}>
                     {[{color:"#22c55e"},{color:"#ef4444"},{color:"#f59e0b"}].map((e,i)=><Cell key={i} fill={e.color}/>)}
                   </Pie>
                   <Tooltip {...TT}/>
@@ -1370,139 +1241,34 @@ ${JSON.stringify(ctx,null,2)}
       {/* ━━━ 유저 조회 ━━━ */}
       {tab==="유저 조회" && (
         <div>
-          <div style={{background:"#0d1b2e",borderRadius:12,padding:12,marginBottom:14,borderLeft:"4px solid #1d4ed8"}}>
-            <div style={{fontSize:12,color:"#3b82f6",fontWeight:700}}>🔍 유저 조회 — 상담원용</div>
-            <div style={{fontSize:11,color:"#2d4a6e",marginTop:2}}>OpenID 검색 → 주문내역 + 악용자 정보 + 처리 히스토리 타임라인</div>
+          <div style={{background:"#0d1b2e",borderRadius:12,padding:12,marginBottom:14,borderLeft:`4px solid ${countryColor}`}}>
+            <div style={{fontSize:12,color:countryColor,fontWeight:700}}>🔍 유저 조회 — {country} 전용</div>
+            <div style={{fontSize:11,color:"#2d4a6e",marginTop:2}}>OpenID 검색 → 주문내역 + 악용자 정보 + 처리 히스토리</div>
           </div>
           <div style={{display:"flex",gap:8,marginBottom:16}}>
             <input value={searchQ} onChange={e=>setSearchQ(e.target.value)} onKeyDown={e=>e.key==="Enter"&&doSearch()}
               placeholder="OpenID 입력 후 Enter"
               style={{flex:1,padding:"10px 14px",borderRadius:10,border:"1px solid #1e3a5f",background:"#0d1b2e",color:"#c8d8f0",fontSize:13,outline:"none"}}/>
             <button onClick={doSearch}
-              style={{padding:"10px 20px",borderRadius:10,border:"none",background:"#1d4ed8",color:"#fff",cursor:"pointer",fontWeight:700,fontSize:13}}>조회</button>
+              style={{padding:"10px 20px",borderRadius:10,border:"none",background:countryColor,color:"#fff",cursor:"pointer",fontWeight:700,fontSize:13}}>조회</button>
           </div>
 
           {searchRes && (
             <div style={{display:"flex",flexDirection:"column",gap:12}}>
-              {/* 요약 */}
               <div style={{background:"#0d1b2e",borderRadius:14,padding:16,border:"1px solid #1e3a5f"}}>
                 <div style={{fontSize:14,fontWeight:800,color:"#e8f4ff",marginBottom:12}}>👤 {searchRes.q}</div>
-                <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
-                  {[
-                    ["환불 주문",searchRes.orders.length+"건","#3b82f6"],
-                    ["악용 횟수",searchRes.abuse?searchRes.abuse.abuseCount+"회":"없음","#f59e0b"],
-                    ["대응 이력",searchRes.history.length+"건","#8b5cf6"],
-                    ["최종 상태",
-                      searchRes.latestStatus?.status || (searchRes.history.length ? searchRes.history[searchRes.history.length-1].status : "없음"),
-                      STATUS_COLORS[searchRes.latestStatus?.status || searchRes.history[searchRes.history.length-1]?.status] || "#4a6fa5"
-                    ],
-                  ].map(([l,v,c])=>(
+                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                  {[["환불 주문",searchRes.orders.length+"건","#3b82f6"],["악용 횟수",searchRes.abuse?searchRes.abuse.abuseCount+"회":"없음","#f59e0b"],["대응 이력",searchRes.history.length+"건","#8b5cf6"],["최종 상태",searchRes.latestStatus?.status||(searchRes.history.length?searchRes.history[searchRes.history.length-1].status:"없음"),STATUS_COLORS[searchRes.latestStatus?.status||searchRes.history[searchRes.history.length-1]?.status]||"#4a6fa5"]].map(([l,v,c])=>(
                     <div key={l} style={{background:"#060d18",borderRadius:10,padding:"8px 14px"}}>
                       <div style={{fontSize:10,color:"#2d4a6e"}}>{l}</div>
                       <div style={{fontSize:14,fontWeight:700,color:c,marginTop:2}}>{v}</div>
                     </div>
                   ))}
                 </div>
-                {/* 연도별 환불 요약 */}
-                {Object.keys(searchRes.yearSummary||{}).length > 0 && (
-                  <div style={{background:"#060d18",borderRadius:8,padding:10,marginBottom:10}}>
-                    <div style={{fontSize:11,color:"#2d4a6e",marginBottom:6}}>📅 연도별 환불 이력</div>
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                      {Object.entries(searchRes.yearSummary).sort().map(([year,info])=>{
-                        const isLatest = year === Object.keys(searchRes.yearSummary).sort().pop();
-                        return (
-                          <div key={year} style={{padding:"4px 10px",borderRadius:6,background:"#0d1b2e",border:`1px solid ${isLatest?"#3b82f6":"#1e3a5f"}`}}>
-                            <span style={{fontSize:11,color:isLatest?"#3b82f6":"#4a6fa5",fontWeight:700}}>{year}년</span>
-                            <span style={{fontSize:10,color:"#4a6fa5",marginLeft:4}}>{info.count}건</span>
-                            <span style={{fontSize:10,color:"#2d4a6e",marginLeft:4}}>{info.platform}·{info.country}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-                {/* Google Sheets 최신 상태 */}
-                {searchRes.latestStatus ? (
-                  <div style={{background:"#060d18",borderRadius:8,padding:10,marginBottom:10,borderLeft:`3px solid ${STATUS_COLORS[searchRes.latestStatus.status]||"#4a6fa5"}`}}>
-                    <div style={{fontSize:11,color:"#2d4a6e",marginBottom:4}}>🔗 Google Sheets 최신 처리 결과</div>
-                    <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                      <span style={{padding:"3px 10px",borderRadius:6,background:(STATUS_COLORS[searchRes.latestStatus.status]||"#4a6fa5")+"22",color:STATUS_COLORS[searchRes.latestStatus.status]||"#4a6fa5",fontWeight:700,fontSize:13}}>
-                        {searchRes.latestStatus.status}
-                      </span>
-                      <span style={{fontSize:11,color:"#4a6fa5"}}>{searchRes.latestStatus.platform} · {searchRes.latestStatus.country}</span>
-                      <span style={{fontSize:11,color:"#2d4a6e"}}>{searchRes.latestStatus.lastDate}</span>
-                    </div>
-                  </div>
-                ) : searchRes.history.length === 0 && (
-                  <div style={{background:"#060d18",borderRadius:8,padding:10,borderLeft:"3px solid #f59e0b",marginBottom:10}}>
-                    <span style={{fontSize:11,color:"#f59e0b"}}>⚠️ Google Sheets에서 해당 유저를 찾을 수 없어요. 대응현황을 먼저 불러와주세요.</span>
-                  </div>
-                )}
-                {searchRes.abuse && (
-                  <div style={{background:"#060d18",borderRadius:8,padding:10,fontSize:11,color:"#4a6fa5"}}>
-                    누적 획득 UC: <span style={{color:"#3b82f6"}}>{fmt(searchRes.abuse.totalUC)}</span> · 현재 보유 UC: <span style={{color:"#22c55e"}}>{fmt(searchRes.abuse.currentUC)}</span> · P값: <span style={{color:searchRes.abuse.pValue>=0?"#22d3ee":"#ef4444"}}>{fmt(searchRes.abuse.pValue)}</span>
-                  </div>
-                )}
               </div>
-
-              {/* 히스토리 타임라인 */}
-              {searchRes.history.length>0&&(
-                <div style={{background:"#0d1b2e",borderRadius:14,padding:18,border:"1px solid #1e3a5f"}}>
-                  <div style={{fontSize:13,color:"#4a6fa5",fontWeight:600,marginBottom:16}}>📋 처리 히스토리 ({searchRes.history.length}건 · 날짜순)</div>
-                  {searchRes.history.map((h,i)=>{
-                    const col=STATUS_COLORS[h.status]||"#4a6fa5";
-                    const isLast=i===searchRes.history.length-1;
-                    return (
-                      <div key={i} style={{display:"flex",gap:14,alignItems:"flex-start"}}>
-                        <div style={{display:"flex",flexDirection:"column",alignItems:"center"}}>
-                          <div style={{width:32,height:32,borderRadius:"50%",background:isLast?col:col+"33",border:`2px solid ${col}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,flexShrink:0}}>
-                            {h.status==="복구완료"?"✅":h.status==="재제재"?"🚫":"⏳"}
-                          </div>
-                          {!isLast&&<div style={{width:2,height:36,background:"#1e3a5f"}}/>}
-                        </div>
-                        <div style={{paddingBottom:isLast?0:12,flex:1,background:isLast?col+"11":"transparent",borderRadius:isLast?8:0,padding:isLast?"8px 12px":"0 0 12px 0",border:isLast?`1px solid ${col}33`:"none"}}>
-                          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:4}}>
-                            <span style={{fontSize:12,fontWeight:700,color:"#e8f4ff"}}>{h.date}</span>
-                            <span style={{padding:"2px 8px",borderRadius:4,fontSize:10,background:col+"22",color:col}}>{h.status}</span>
-                            <span style={{fontSize:10,color:"#2d4a6e"}}>{h.platform} · {h.country}</span>
-                            {isLast&&<span style={{fontSize:10,color:col,fontWeight:700}}>← 최신</span>}
-                          </div>
-                          {h.resultText&&<div style={{fontSize:11,color:"#4a6fa5"}}>처리내용: <span style={{color:col}}>{h.resultText}</span></div>}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* 환불 주문 */}
-              {searchRes.orders.length>0&&(
-                <div style={{background:"#0d1b2e",borderRadius:14,padding:18,border:"1px solid #1e3a5f"}}>
-                  <div style={{fontSize:13,color:"#4a6fa5",fontWeight:600,marginBottom:12}}>💳 환불 주문 내역 ({searchRes.orders.length}건)</div>
-                  <div style={{overflowX:"auto"}}>
-                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                      <thead><tr style={{borderBottom:"1px solid #1e3a5f"}}>
-                        {["날짜","주문번호","플랫폼","국가","UC잔액"].map(h=><th key={h} style={{padding:"7px 10px",textAlign:"left",color:"#2d4a6e"}}>{h}</th>)}
-                      </tr></thead>
-                      <tbody>
-                        {searchRes.orders.map((o,i)=>(
-                          <tr key={i} style={{borderBottom:"1px solid #0a1220",background:i%2===0?"#0a1220":"transparent"}}>
-                            <td style={{padding:"7px 10px",color:"#4a6fa5"}}>{o.date}</td>
-                            <td style={{padding:"7px 10px",color:"#c8d8f0",fontSize:10}}>{o.orderNo}</td>
-                            <td style={{padding:"7px 10px"}}><span style={{padding:"2px 7px",borderRadius:4,fontSize:10,background:o.platform==="Google"?"#1e3a5f":"#2d1b5e",color:o.platform==="Google"?"#3b82f6":"#a855f7"}}>{o.platform}</span></td>
-                            <td style={{padding:"7px 10px",color:"#4a6fa5"}}>{o.country}</td>
-                            <td style={{padding:"7px 10px",color:"#22d3ee"}}>{fmt(o.ucBalance)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-
               {searchRes.orders.length===0&&searchRes.history.length===0&&(
                 <div style={{background:"#0d1b2e",borderRadius:14,padding:24,textAlign:"center",color:"#2d4a6e",fontSize:13}}>
-                  <strong style={{color:"#c8d8f0"}}>{searchRes.q}</strong> — 데이터 없음
+                  <strong style={{color:"#c8d8f0"}}>{searchRes.q}</strong> — {country} 데이터 없음
                 </div>
               )}
             </div>
@@ -1511,44 +1277,114 @@ ${JSON.stringify(ctx,null,2)}
       )}
 
       {/* ━━━ AI 분석 ━━━ */}
-      {tab==="AI 분석"&&(
+      {tab==="AI 분석" && (
         <div style={{display:"flex",flexDirection:"column",height:"calc(100vh - 300px)",minHeight:400}}>
-          <div style={{background:"#0d1b2e",borderRadius:12,padding:12,marginBottom:12,borderLeft:"4px solid #1d4ed8"}}>
-            <div style={{fontSize:12,color:"#3b82f6",fontWeight:700}}>🤖 AI 데이터 분석</div>
-            <div style={{fontSize:11,color:"#2d4a6e",marginTop:2}}>업로드된 데이터 기반으로 자유롭게 질문하세요</div>
+          <div style={{background:"#0d1b2e",borderRadius:12,padding:12,marginBottom:12,borderLeft:`4px solid ${countryColor}`}}>
+            <div style={{fontSize:12,color:countryColor,fontWeight:700}}>🤖 AI 데이터 분석 — {country} 전용</div>
+            <div style={{fontSize:11,color:"#2d4a6e",marginTop:2}}>{country} 데이터 기반으로 자유롭게 질문하세요</div>
           </div>
           <div style={{flex:1,background:"#0d1b2e",borderRadius:14,padding:16,border:"1px solid #1e3a5f",overflowY:"auto",marginBottom:12}}>
             {chatMessages.map((m,i)=>(
               <div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start",marginBottom:12}}>
-                <div style={{maxWidth:"80%",padding:"10px 14px",borderRadius:12,background:m.role==="user"?"#1d4ed8":"#0a1628",color:m.role==="user"?"#fff":"#c8d8f0",fontSize:13,lineHeight:1.6,whiteSpace:"pre-wrap",border:m.role==="assistant"?"1px solid #1e3a5f":"none",borderBottomRightRadius:m.role==="user"?4:12,borderBottomLeftRadius:m.role==="assistant"?4:12}}>
+                <div style={{maxWidth:"80%",padding:"10px 14px",borderRadius:12,background:m.role==="user"?countryColor:"#0a1628",color:"#fff",fontSize:13,lineHeight:1.6,whiteSpace:"pre-wrap",border:m.role==="assistant"?"1px solid #1e3a5f":"none"}}>
                   {m.content}
                 </div>
               </div>
             ))}
-            {chatLoading&&<div style={{display:"flex",justifyContent:"flex-start",marginBottom:12}}><div style={{padding:"10px 14px",borderRadius:12,background:"#0a1628",border:"1px solid #1e3a5f",color:"#3b82f6",fontSize:13}}>⏳ 분석 중...</div></div>}
+            {chatLoading&&<div style={{display:"flex",justifyContent:"flex-start",marginBottom:12}}><div style={{padding:"10px 14px",borderRadius:12,background:"#0a1628",border:"1px solid #1e3a5f",color:countryColor,fontSize:13}}>⏳ 분석 중...</div></div>}
             <div ref={chatEndRef}/>
           </div>
           <div style={{display:"flex",gap:8}}>
             <input value={chatInput} onChange={e=>setChatInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&sendChat()}
-              placeholder="질문 입력 (예: 2025년 일본 iOS 건수 몇 건이에요?)"
+              placeholder={`${country} 데이터 질문 입력...`}
               style={{flex:1,padding:"12px 16px",borderRadius:12,border:"1px solid #1e3a5f",background:"#0d1b2e",color:"#c8d8f0",fontSize:13,outline:"none"}}/>
             <button onClick={sendChat} disabled={chatLoading}
-              style={{padding:"12px 20px",borderRadius:12,border:"none",background:chatLoading?"#1e3a5f":"#1d4ed8",color:"#fff",cursor:chatLoading?"wait":"pointer",fontWeight:700,fontSize:13}}>전송</button>
-          </div>
-          <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}>
-            {["전체 기간 총 건수 알려줘","2025년 한국 vs 일본 비교해줘","복구완료율 가장 높은 세그먼트는?","회수 vs 제재 비율 알려줘"].map(q=>(
-              <button key={q} onClick={()=>setChatInput(q)}
-                style={{padding:"5px 12px",borderRadius:20,border:"1px solid #1e3a5f",background:"#0a1220",color:"#4a6fa5",cursor:"pointer",fontSize:11}}>
-                {q}
-              </button>
-            ))}
+              style={{padding:"12px 20px",borderRadius:12,border:"none",background:chatLoading?"#1e3a5f":countryColor,color:"#fff",cursor:chatLoading?"wait":"pointer",fontWeight:700,fontSize:13}}>전송</button>
           </div>
         </div>
       )}
 
-      <div style={{marginTop:16,padding:"8px 14px",background:"#0d1b2e",borderRadius:10,fontSize:10,color:"#1e3a5f",borderLeft:"3px solid #1d4ed8"}}>
-        💡 엑셀 업로드 → 시트 자동 인식 · Google Sheets → 대응현황 실시간 로드 · AI 분석 → 자유 질문
+      <div style={{marginTop:16,padding:"8px 14px",background:"#0d1b2e",borderRadius:10,fontSize:10,color:"#1e3a5f",borderLeft:`3px solid ${countryColor}`}}>
+        {countryFlag} {country} 전용 대시보드 · 엑셀 1회 업로드 · Google Sheets 실시간 연동
       </div>
     </div>
+  );
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 메인 앱 (라우터)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+export default function App() {
+  const [screen, setScreen] = useState("landing"); // "landing" | "한국" | "일본"
+  const [parsedData, setParsedData] = useState(null);
+  const [uploadLog, setUploadLog] = useState([]);
+  const [fileNames, setFileNames] = useState([]);
+  const [toast, setToast] = useState(null);
+
+  const showToast = (msg, color="#22c55e") => {
+    setToast({ msg, color });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  const handleFile = useCallback(async (file) => {
+    if (!file) return;
+    try {
+      const ab = await file.arrayBuffer();
+      const wb = XLSX.read(ab);
+      const parsed = parseExcelFile(wb);
+
+      setParsedData(prev => {
+        if (!prev) return parsed;
+        // 기존 데이터와 병합
+        const merged = {
+          orderRows: [...prev.orderRows, ...parsed.orderRows],
+          abuseRows: [...prev.abuseRows, ...parsed.abuseRows],
+          abuseMap: { ...prev.abuseMap, ...parsed.abuseMap },
+          oidInfo: { ...prev.oidInfo, ...parsed.oidInfo },
+          uniqueOidSet: new Set([...prev.uniqueOidSet, ...parsed.uniqueOidSet]),
+          log: [...prev.log, ...parsed.log],
+        };
+        return merged;
+      });
+      setUploadLog(prev => [...prev, ...parsed.log]);
+      setFileNames(prev => {
+        if (prev.includes(file.name)) return prev;
+        return [...prev, file.name];
+      });
+
+      const kr = parsed.orderRows.filter(d=>d.country==="한국").length;
+      const jp = parsed.orderRows.filter(d=>d.country==="일본").length;
+      showToast(`✅ ${file.name.slice(0,20)} 업로드 완료! 한국 ${kr}건 · 일본 ${jp}건`);
+    } catch(e) {
+      showToast("❌ 파싱 오류: " + e.message, "#ef4444");
+    }
+  }, []);
+
+  return (
+    <>
+      {toast && (
+        <div style={{position:"fixed",bottom:32,left:"50%",transform:"translateX(-50%)",zIndex:9999,background:toast.color,color:"#fff",padding:"14px 28px",borderRadius:14,fontWeight:700,fontSize:13,boxShadow:"0 4px 24px rgba(0,0,0,0.6)",whiteSpace:"nowrap",maxWidth:"90vw",overflow:"hidden",textOverflow:"ellipsis"}}>
+          {toast.msg}
+        </div>
+      )}
+
+      {screen === "landing" && (
+        <LandingPage
+          onEnter={country => setScreen(country)}
+          parsedData={parsedData}
+          uploadLog={uploadLog}
+          onFile={handleFile}
+          fileNames={fileNames}
+        />
+      )}
+
+      {(screen === "한국" || screen === "일본") && parsedData && (
+        <Dashboard
+          country={screen}
+          parsedData={parsedData}
+          onBack={() => setScreen("landing")}
+        />
+      )}
+    </>
   );
 }
