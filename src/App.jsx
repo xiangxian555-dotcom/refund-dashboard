@@ -744,7 +744,7 @@ function Dashboard({ country, parsedData, onBack }) {
             </div>
             <div style={{background:"#0d1b2e",borderRadius:14,padding:18,border:"1px solid #1e3a5f"}}>
               <div style={{fontSize:13,color:"#4a6fa5",fontWeight:600,marginBottom:14}}>처리 현황</div>
-              {[["회수 처리",stats.recovered,"#22d3ee"],["제재 처리",stats.sanctioned,"#ef4444"],["미처리",Math.max(0,stats.totalAbuseUnique-stats.recovered-stats.sanctioned),"#475569"]].filter(([,v])=>v>0).map(([l,v,c])=>(
+              {[["회수 처리",stats.recovered,"#22d3ee"],["제재 처리",stats.sanctioned,"#ef4444"]].filter(([,v])=>v>0).map(([l,v,c])=>(
                 <div key={l} style={{marginBottom:12}}>
                   <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:4}}>
                     <span style={{color:"#4a6fa5"}}>{l}</span>
@@ -845,7 +845,7 @@ function Dashboard({ country, parsedData, onBack }) {
           </div>
         ):(<>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10,marginBottom:14}}>
-            <Card icon="📋" label="총 대응건수" value={fmt(filteredResp.length)} sub="Google Sheets 기준" color="#3b82f6"/>
+            <Card icon="📋" label="총 제재 대상" value={fmt(stats.totalAbuseUnique)} sub="악용자 리스트 기준" color="#3b82f6"/>
             <Card icon="✅" label="복구 완료" value={fmt(stats.respRecovered)} sub={`${stats.totalAbuseUnique?Math.round(stats.respRecovered/stats.totalAbuseUnique*100):0}%`} color="#22c55e"/>
             <Card icon="🚫" label="재제재" value={fmt(stats.respResanctioned)} sub={`${stats.totalAbuseUnique?Math.round(stats.respResanctioned/stats.totalAbuseUnique*100):0}%`} color="#ef4444"/>
           </div>
