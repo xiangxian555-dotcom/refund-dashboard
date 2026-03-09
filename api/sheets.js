@@ -43,19 +43,32 @@ function classifyKorea(nText, oText) {
 }
 
 // ━━━ 일본 시트 분류 ━━━
-// Y열 마지막 줄 기준
+// Y열 전체 텍스트 기준 (줄바꿈 처리 포함)
 // "回収" 포함 → 복구완료
 // "BAN" or "停止" 포함 → 재제재
 function classifyJapan(yText) {
   if (!yText || !yText.trim()) return null;
-  const lastLine = getLastLine(yText);
-  const checkText = lastLine || yText;
 
-  if (/回収/.test(checkText)) return "복구완료";
-  if (/BAN|停止/.test(checkText)) return "재제재";
-  // 전체 텍스트도 확인
-  if (/回収/.test(yText)) return "복구완료";
-  if (/BAN|停止/.test(yText)) return "재제재";
+  // 줄바꿈 정규화 (\n, \r, 유니코드 줄바꿈 모두 처리)
+  const normalized = yText.replace(/\r\n|\r|\n|\u000A|\u000D/g, "\n");
+  const lines = normalized.split("\n").map(l => l.trim()).filter(Boolean);
+  const lastLine = lines[lines.length - 1] || "";
+  const fullText = normalized;
+
+  // 마지막 줄 우선 판단
+  if (/回収/.test(lastLine)) return "복구완료";
+  if (/BAN|停止|再制裁/.test(lastLine)) return "재제재";
+
+  // 전체 텍스트에서 판단 (마지막 줄에 없을 경우)
+  // 回収完了 관련 표현
+  if (/回収完了|回収完了案内|回収いたしました|UCの回収|uc.*回収|回收完了|回收案内/.test(fullText)) return "복구완료";
+  // BAN/停止 관련 표현
+  if (/BANいたしました|BAN処理|再度BAN|停止いたしました|期限.*BAN/.test(fullText)) return "재제재";
+
+  // 전체에 回収 있으면 복구완료
+  if (/回収|回收/.test(fullText)) return "복구완료";
+  if (/BAN|停止/.test(fullText)) return "재제재";
+
   return null;
 }
 
