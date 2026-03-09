@@ -85,11 +85,15 @@ function parseExcelFile(wb) {
     // ━━━ 시트1: 악용 대상자 UC 보유 정보 ━━━
     if (sLower.includes("uc 보유") || sLower.includes("uc보유") || sLower.includes("보유 정보") ||
         sLower.includes("보유정보") || sLower.includes("악용 대상자 uc") || sLower.includes("악용대상자uc") ||
-        sLower.includes("대상자 uc") || sLower.includes("대상자uc") || (sLower.includes("대상자") && sLower.includes("보유"))) {
+        sLower.includes("대상자 uc") || sLower.includes("대상자uc") || sLower.includes("uc 보유 정보") ||
+        (sLower.includes("대상자") && sLower.includes("보유")) || sLower.includes("악용 대상자 u")) {
       const ci = {
         openid: fc("오픈 아이디","오픈아이디","openid","open id","open_id","오픈 id","오픈id"),
         orderNo: fc("주문번호","order number","order no","orderid"),
-        currency: fc("화폐","currency","통화") >= 0 ? fc("화폐","currency","통화") : 7,
+        currency: (() => {
+          const idx = fc("화폐","currency","통화","h열","화폐종류");
+          return idx >= 0 ? idx : 7; // H열 기본값
+        })(),
         ucBalance: fc("uc잔액","uc 잔액","잔액","현재 보유","현재보유"),
         time: fc("시간","time","날짜","date","기간"),
         amount: fc("charged amount","item price","payamt","금액","amount"),
@@ -489,17 +493,19 @@ function Dashboard({ country, parsedData, onBack }) {
 
   const sheetOidMap = useMemo(() => {
     const map = {};
-    // OpenID 정규화: 공백 제거, 소수점 숫자 정수 변환 (예: "123.0" → "123")
-    const normalizeOid = (oid) => {
-      const s = String(oid||"").trim();
-      // 소수점으로 끝나는 숫자 처리 (예: 87886238450985.0 → 87886238450985)
-      return s.replace(/\.0+$/, "");
-    };
-    [...responseData].sort((a,b)=>a.date.localeCompare(b.date)).forEach(d => {
-      if (!d.openid) return;
-      const key = normalizeOid(d.openid);
-      if (!map[key]||d.date>=map[key].lastDate) map[key]={status:d.status,lastDate:d.date};
-    });
+    const normalizeOid = (oid) => String(oid||"").trim().replace(/\.0+$/, "");
+    // 날짜순 정렬 후 각 OpenID의 최신 복구완료/재제재 상태만 저장
+    [...responseData]
+      .filter(d => d.status === "복구완료" || d.status === "재제재")
+      .sort((a,b) => a.date.localeCompare(b.date))
+      .forEach(d => {
+        if (!d.openid) return;
+        const key = normalizeOid(d.openid);
+        // 항상 최신 날짜로 덮어씌움
+        if (!map[key] || d.date >= map[key].lastDate) {
+          map[key] = { status: d.status, lastDate: d.date };
+        }
+      });
     return map;
   }, [responseData]);
 
@@ -827,7 +833,7 @@ function Dashboard({ country, parsedData, onBack }) {
           </div>
         ):(<>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10,marginBottom:14}}>
-            <Card icon="📋" label="총 제재 대상" value={fmt(stats.totalAbuseUnique)} sub="유니크 OpenID 기준" color="#3b82f6"/>
+            <Card icon="📋" label="총 대응건수" value={fmt(filteredResp.length)} sub="Google Sheets 기준" color="#3b82f6"/>
             <Card icon="✅" label="복구 완료" value={fmt(stats.respRecovered)} sub={`${stats.totalAbuseUnique?Math.round(stats.respRecovered/stats.totalAbuseUnique*100):0}%`} color="#22c55e"/>
             <Card icon="🚫" label="재제재" value={fmt(stats.respResanctioned)} sub={`${stats.totalAbuseUnique?Math.round(stats.respResanctioned/stats.totalAbuseUnique*100):0}%`} color="#ef4444"/>
           </div>
