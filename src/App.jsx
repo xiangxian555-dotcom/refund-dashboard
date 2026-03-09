@@ -153,7 +153,7 @@ function parseExcelFile(wb) {
           orderRows.push({
             orderNo, openid, currency, country, platform: "Google",
             date, year: date.slice(0,4), month: date.slice(0,7),
-            ucBalance: 0, amount, type: "UC보유정보",
+            ucBalance: 0, amount, type: "OrderID", // 카운트 제외
           });
           parsed++;
         }
