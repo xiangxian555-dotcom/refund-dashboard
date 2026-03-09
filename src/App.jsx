@@ -432,6 +432,16 @@ function Dashboard({ country, parsedData, onBack }) {
   const [toast, setToast] = useState(null);
 
   const showToast = (msg, color="#22c55e") => { setToast({msg,color}); setTimeout(()=>setToast(null),3000); };
+  // OpenID 정규화 함수 (과학적 표기법, 소수점 처리)
+  const normalizeOid = (oid) => {
+    if (!oid) return "";
+    let s = String(oid).trim();
+    if (/e[+\-]/i.test(s)) {
+      try { s = String(Math.round(parseFloat(s))); } catch(ex) {}
+    }
+    return s.replace(/\.0+$/, "");
+  };
+
   const countryColor = country==="한국"?"#0ea5e9":"#f97316";
   const countryFlag = country==="한국"?"🇰🇷":"🇯🇵";
   const currencySymbol = country==="한국"?"₩":"¥";
@@ -452,7 +462,7 @@ function Dashboard({ country, parsedData, onBack }) {
       if(a.openid) map[normalizeOid(a.openid)]=a;
     });
     return map;
-  }, [parsedData, country, normalizeOid]);
+  }, [parsedData, country]);
 
   const years = useMemo(() => {
     const ys = [...new Set(allOrderRows.map(d=>d.year))].filter(Boolean).sort();
@@ -494,18 +504,7 @@ function Dashboard({ country, parsedData, onBack }) {
     return true;
   }), [responseData, yearFilter, monthFilter]);
 
-  // OpenID 정규화: 과학적 표기법, 소수점, 공백 모두 처리
-  const normalizeOid = useCallback((oid) => {
-    if (!oid) return "";
-    let s = String(oid).trim();
-    // 과학적 표기법 처리 (예: 1.31E+15 → 1310000000000000)
-    if (/e[+\-]/i.test(s)) {
-      try { s = String(Math.round(parseFloat(s))); } catch(e) {}
-    }
-    // 소수점 제거 (예: 1309512980366633.0 → 1309512980366633)
-    s = s.replace(/\.0+$/, "");
-    return s;
-  }, []);
+
 
   const sheetOidMap = useMemo(() => {
     const map = {};
@@ -520,7 +519,7 @@ function Dashboard({ country, parsedData, onBack }) {
         }
       });
     return map;
-  }, [responseData, normalizeOid]);
+  }, [responseData]);
 
   const stats = useMemo(() => {
     const totalOrders = filtered.filter(d=>d.type==="UC보유정보").length;
@@ -544,7 +543,7 @@ function Dashboard({ country, parsedData, onBack }) {
       else if(sv.status==="재제재") respResanctioned++;
     });
     return { totalOrders, amountTotal, totalAbuseUnique, sanctioned, recovered, respRecovered, respResanctioned };
-  }, [filtered, allAbuseRows, allAbuseMap, sheetOidMap, normalizeOid]);
+  }, [filtered, allAbuseRows, allAbuseMap, sheetOidMap]);
 
   const yearlyChart = useMemo(() => {
     const g = {};
@@ -569,7 +568,7 @@ function Dashboard({ country, parsedData, onBack }) {
       else if(sv?.status==="재제재") g[year].resanctioned++;
     });
     return g;
-  }, [allAbuseRows, allOrderRows, sheetOidMap, normalizeOid]);
+  }, [allAbuseRows, allOrderRows, sheetOidMap]);
 
   const monthlyChart = useMemo(() => {
     const src = yearFilter==="전체"?allOrderRows:filtered;
