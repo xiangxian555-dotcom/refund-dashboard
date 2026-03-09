@@ -174,13 +174,18 @@ function parseExcelFile(wb) {
         pValue: fc("p값","p 값"),
         result: fc("회수","제재","처리결과","결과","처리") >= 0 ? fc("회수","제재","처리결과","결과","처리") : 6,
       };
+      // 유니크 OpenID만 저장 (중복 제거)
+      const abuseOidSet = new Set();
       let parsed = 0;
       for (let i = headerIdx + 1; i < raw.length; i++) {
         const row = raw[i];
         const openid = String(row[ci.openid] ?? "").trim();
         if (!openid) continue;
+        if (abuseOidSet.has(openid)) continue; // 중복 제거
+        abuseOidSet.add(openid);
         const currency = String(row[ci.currency] ?? "KRW").trim().toUpperCase() || "KRW";
         const country = getCountry(currency);
+        if (country === "기타") continue; // KRW/JPY 아닌 경우 제외
         const resultText = String(row[ci.result] ?? "").trim();
         const hasJesae = /제재/.test(resultText);
         const hasHoesu = /회수/.test(resultText);
