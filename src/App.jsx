@@ -177,7 +177,6 @@ function parseExcelFile(wb) {
       // 유니크 OpenID만 저장 (중복 제거)
       const abuseOidSet = new Set();
       let parsed = 0;
-      let jpyDebug = 0;
       for (let i = headerIdx + 1; i < raw.length; i++) {
         const row = raw[i];
         const openid = String(row[ci.openid] ?? "").trim();
@@ -187,11 +186,6 @@ function parseExcelFile(wb) {
         const currency = String(row[ci.currency] ?? "KRW").trim().toUpperCase() || "KRW";
         const country = getCountry(currency);
         if (country === "기타") continue; // KRW/JPY 아닌 경우 제외
-        // JPY OpenID 로그 (처음 5개)
-        if (country === "일본" && jpyDebug < 5) {
-          console.log("[JPY악용자OpenID]", jpyDebug, "raw:", row[ci.openid], "→ string:", openid);
-          jpyDebug++;
-        }
         const resultText = String(row[ci.result] ?? "").trim();
         const hasJesae = /제재/.test(resultText);
         const hasHoesu = /회수/.test(resultText);
@@ -453,6 +447,18 @@ function Dashboard({ country, parsedData, onBack }) {
     return s.replace(/\.0+$/, "");
   };
 
+  // sheetOidMap에서 OpenID 조회 (정밀도 손실 대응)
+  const lookupOid = (oid, map) => {
+    const norm = normalizeOid(oid);
+    if (map[norm]) return map[norm];
+    // 앞 15자리로 재시도 (일본 구글시트 숫자 손실 대응)
+    if (norm.length > 15) {
+      const truncated = norm.slice(0, 15);
+      if (map[truncated]) return map[truncated];
+    }
+    return null;
+  };
+
   const countryColor = country==="한국"?"#0ea5e9":"#f97316";
   const countryFlag = country==="한국"?"🇰🇷":"🇯🇵";
   const currencySymbol = country==="한국"?"₩":"¥";
@@ -548,7 +554,7 @@ function Dashboard({ country, parsedData, onBack }) {
     });
     let respRecovered=0, respResanctioned=0;
     abuseUniqueOids.forEach(oid=>{
-      const sv=sheetOidMap[normalizeOid(oid)];
+      const sv=lookupOid(oid, sheetOidMap);
       if(!sv) return;
       if(sv.status==="복구완료") respRecovered++;
       else if(sv.status==="재제재") respResanctioned++;
@@ -574,7 +580,7 @@ function Dashboard({ country, parsedData, onBack }) {
       const year = uc?.year; if(!year) return;
       if(!g[year]) g[year]={sanctioned:0,recovered:0,resanctioned:0};
       if(a.action==="제재"||a.action==="제재+회수") g[year].sanctioned++;
-      const sv = sheetOidMap[normOid];
+      const sv = lookupOid(normOid, sheetOidMap);
       if(sv?.status==="복구완료") g[year].recovered++;
       else if(sv?.status==="재제재") g[year].resanctioned++;
     });
