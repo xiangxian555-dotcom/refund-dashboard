@@ -204,11 +204,19 @@ export default async function handler(req, res) {
           }
           console.log("[일본시트] 헤더수:", headers.length, "코멘트열:", yColIdx, "헤더:", headers[yColIdx]);
 
+          // 처음 3개 OpenID 로그 (디버깅용)
+          let debugCount = 0;
+
           // 전체 행 저장 (중복 제거 없음 — 히스토리 전체 보존)
           for (let i = headerIdx + 1; i < rows.length; i++) {
             const row = rows[i];
             const openid = String(row[ci.openid] || "").trim();
             if (!openid) continue;
+
+            if (debugCount < 3) {
+              console.log("[일본OpenID]", debugCount, "raw:", row[ci.openid], "→ string:", openid);
+              debugCount++;
+            }
 
             const yText = String(row[yColIdx] || "").trim();
             const status = classifyJapan(yText);
