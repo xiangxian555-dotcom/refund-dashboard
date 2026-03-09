@@ -448,12 +448,11 @@ function Dashboard({ country, parsedData, onBack }) {
 
   const allAbuseMap = useMemo(() => {
     const map = {};
-    const normalizeOid = (oid) => String(oid||"").trim().replace(/\.0+$/, "");
     parsedData.abuseRows.filter(a=>a.country===country).forEach(a=>{
       if(a.openid) map[normalizeOid(a.openid)]=a;
     });
     return map;
-  }, [parsedData, country]);
+  }, [parsedData, country, normalizeOid]);
 
   const years = useMemo(() => {
     const ys = [...new Set(allOrderRows.map(d=>d.year))].filter(Boolean).sort();
@@ -495,31 +494,40 @@ function Dashboard({ country, parsedData, onBack }) {
     return true;
   }), [responseData, yearFilter, monthFilter]);
 
+  // OpenID 정규화: 과학적 표기법, 소수점, 공백 모두 처리
+  const normalizeOid = useCallback((oid) => {
+    if (!oid) return "";
+    let s = String(oid).trim();
+    // 과학적 표기법 처리 (예: 1.31E+15 → 1310000000000000)
+    if (/e[+\-]/i.test(s)) {
+      try { s = String(Math.round(parseFloat(s))); } catch(e) {}
+    }
+    // 소수점 제거 (예: 1309512980366633.0 → 1309512980366633)
+    s = s.replace(/\.0+$/, "");
+    return s;
+  }, []);
+
   const sheetOidMap = useMemo(() => {
     const map = {};
-    const normalizeOid = (oid) => String(oid||"").trim().replace(/\.0+$/, "");
-    // 날짜순 정렬 후 각 OpenID의 최신 복구완료/재제재 상태만 저장
     [...responseData]
       .filter(d => d.status === "복구완료" || d.status === "재제재")
       .sort((a,b) => a.date.localeCompare(b.date))
       .forEach(d => {
         if (!d.openid) return;
         const key = normalizeOid(d.openid);
-        // 항상 최신 날짜로 덮어씌움
         if (!map[key] || d.date >= map[key].lastDate) {
           map[key] = { status: d.status, lastDate: d.date };
         }
       });
     return map;
-  }, [responseData]);
+  }, [responseData, normalizeOid]);
 
   const stats = useMemo(() => {
     const totalOrders = filtered.filter(d=>d.type==="UC보유정보").length;
     const uniqueUsers = new Set(filtered.filter(d=>d.type==="UC보유정보").map(d=>d.openid).filter(Boolean)).size;
-    // 환불 금액: OrderID 시트 amount 우선, 없으면 UC보유정보 amount
-    const amountTotal = filtered.filter(d=>d.type==="UC보유정보").reduce((s,d)=>s+Math.abs(d.amount||0),0);
+    // 환불 금액: UC보유정보 시트 기준 (OrderID 시트로 금액 업데이트됨)
+    const amountTotal = filtered.reduce((s,d)=>s+Math.abs(d.amount||0),0);
 
-    const normalizeOid = (oid) => String(oid||"").trim().replace(/\.0+$/, "");
     const abuseUniqueOids = [...new Set(allAbuseRows.map(a=>normalizeOid(a.openid)).filter(Boolean))];
     const totalAbuseUnique = abuseUniqueOids.length;
     let sanctioned=0, recovered=0;
@@ -530,13 +538,13 @@ function Dashboard({ country, parsedData, onBack }) {
     });
     let respRecovered=0, respResanctioned=0;
     abuseUniqueOids.forEach(oid=>{
-      const sv=sheetOidMap[oid] || sheetOidMap[String(oid).replace(/\.0+$/, "")];
+      const sv=sheetOidMap[normalizeOid(oid)];
       if(!sv) return;
       if(sv.status==="복구완료") respRecovered++;
       else if(sv.status==="재제재") respResanctioned++;
     });
     return { totalOrders, amountTotal, totalAbuseUnique, sanctioned, recovered, respRecovered, respResanctioned };
-  }, [filtered, allAbuseRows, allAbuseMap, sheetOidMap]);
+  }, [filtered, allAbuseRows, allAbuseMap, sheetOidMap, normalizeOid]);
 
   const yearlyChart = useMemo(() => {
     const g = {};
@@ -551,16 +559,17 @@ function Dashboard({ country, parsedData, onBack }) {
   const yearlyAbuseStats = useMemo(() => {
     const g = {};
     allAbuseRows.forEach(a=>{
-      const uc = allOrderRows.find(d=>d.openid===a.openid&&d.type==="UC보유정보");
+      const normOid = normalizeOid(a.openid);
+      const uc = allOrderRows.find(d=>normalizeOid(d.openid)===normOid&&d.type==="UC보유정보");
       const year = uc?.year; if(!year) return;
       if(!g[year]) g[year]={sanctioned:0,recovered:0,resanctioned:0};
       if(a.action==="제재"||a.action==="제재+회수") g[year].sanctioned++;
-      const sv=sheetOidMap[a.openid];
+      const sv = sheetOidMap[normOid];
       if(sv?.status==="복구완료") g[year].recovered++;
       else if(sv?.status==="재제재") g[year].resanctioned++;
     });
     return g;
-  }, [allAbuseRows, allOrderRows, sheetOidMap]);
+  }, [allAbuseRows, allOrderRows, sheetOidMap, normalizeOid]);
 
   const monthlyChart = useMemo(() => {
     const src = yearFilter==="전체"?allOrderRows:filtered;
