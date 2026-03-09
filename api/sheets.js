@@ -122,8 +122,7 @@ export default async function handler(req, res) {
             oCol: 14, // O열 (0-based index 14)
           };
 
-          // OpenID별 마지막 행만 유지 (중복 제거)
-          const koreaMap = {}; // openid → {status, date, resultText}
+          // 전체 행 저장 (중복 제거 없음 — 히스토리 전체 보존)
           for (let i = headerIdx + 1; i < rows.length; i++) {
             const row = rows[i];
             const openid = String(row[ci.openid] || "").trim();
@@ -133,13 +132,11 @@ export default async function handler(req, res) {
             const oText = String(row[ci.oCol] || "").trim();
             const status = classifyKorea(nText, oText);
 
-            // 처리 결과가 있는 행만 저장 (마지막 행으로 덮어씀)
-            if (!status) continue;
-
+            // 처리 결과 없는 행도 저장 (히스토리 조회용) — null이면 "처리중"
             const dateRaw = String(row[ci.date] || "").trim();
             const date = parseDate(dateRaw);
 
-            koreaMap[openid] = {
+            allRows.push({
               openid,
               country: tab.country,
               platform: tab.platform,
@@ -147,20 +144,20 @@ export default async function handler(req, res) {
               year: date.slice(0, 4),
               month: date.slice(0, 7),
               resultText: oText || nText,
-              status,
+              status: status || "처리중",
               segment: `${tab.platform}_${tab.country}`,
-            };
+            });
           }
-          // 중복 제거된 결과를 allRows에 추가
-          Object.values(koreaMap).forEach(r => allRows.push(r));
         }
 
         // ━━━ 일본 시트 파싱 ━━━
+        // 구조: 1~2행 타이틀, 3행 대분류, 4행 실제헤더, 5행~ 데이터
+        // E열(4) = OPEN ID, B열(1) = 抽出期間, Y열(24) = コメント
         else {
-          // 헤더 행 찾기 (4행에 헤더 있음)
-          let headerIdx = 0;
-          for (let i = 0; i < Math.min(8, rows.length); i++) {
-            if (rows[i].some(c => /openid|オープン|OPEN|open/i.test(c || ""))) {
+          // 헤더 행 찾기 — "OPEN ID" 텍스트가 있는 행
+          let headerIdx = 3; // 기본값: 4행(0-based: 3)
+          for (let i = 0; i < Math.min(10, rows.length); i++) {
+            if (rows[i].some(c => /^open.?id$/i.test((c || "").trim()))) {
               headerIdx = i; break;
             }
           }
@@ -168,31 +165,27 @@ export default async function handler(req, res) {
 
           const findCol = (...names) => {
             for (const n of names) {
-              const idx = headers.findIndex(h => new RegExp(n, "i").test(h || ""));
+              const idx = headers.findIndex(h => new RegExp(n, "i").test((h || "").trim()));
               if (idx >= 0) return idx;
             }
             return -1;
           };
 
-          const ci = {
-            // E열(index 4) = OPEN ID
-            openid: findCol("OPEN ID", "openid", "オープン") >= 0
-              ? findCol("OPEN ID", "openid", "オープン") : 4,
-            // B열(index 1) = 抽出期間
-            date: findCol("抽出期間", "期間", "date", "기간") >= 0
-              ? findCol("抽出期間", "期間", "date", "기간") : 1,
-          };
+          // E열(index 4) = OPEN ID, B열(index 1) = 抽出期間
+          const openidIdx = findCol("OPEN ID", "openid") >= 0 ? findCol("OPEN ID", "openid") : 4;
+          const dateIdx = findCol("抽出期間", "期間") >= 0 ? findCol("抽出期間", "期間") : 1;
+
+          const ci = { openid: openidIdx, date: dateIdx };
 
           // Y열 = コメント (index 24) — 동적으로 찾기
           let yColIdx = 24;
           for (let c = 0; c < headers.length; c++) {
-            if (/コメント|comment/i.test(headers[c] || "")) {
+            if (/コメント|comment/i.test((headers[c] || "").trim())) {
               yColIdx = c; break;
             }
           }
 
-          // OpenID별 마지막 행만 유지 (중복 제거)
-          const japanMap = {};
+          // 전체 행 저장 (중복 제거 없음 — 히스토리 전체 보존)
           for (let i = headerIdx + 1; i < rows.length; i++) {
             const row = rows[i];
             const openid = String(row[ci.openid] || "").trim();
@@ -201,13 +194,10 @@ export default async function handler(req, res) {
             const yText = String(row[yColIdx] || "").trim();
             const status = classifyJapan(yText);
 
-            // 처리 결과가 있는 행만 저장 (마지막 행으로 덮어씀)
-            if (!status) continue;
-
             const dateRaw = String(row[ci.date] || "").trim();
             const date = parseDate(dateRaw);
 
-            japanMap[openid] = {
+            allRows.push({
               openid,
               country: tab.country,
               platform: tab.platform,
@@ -215,12 +205,10 @@ export default async function handler(req, res) {
               year: date.slice(0, 4),
               month: date.slice(0, 7),
               resultText: yText,
-              status,
+              status: status || "처리중",
               segment: `${tab.platform}_${tab.country}`,
-            };
+            });
           }
-          // 중복 제거된 결과를 allRows에 추가
-          Object.values(japanMap).forEach(r => allRows.push(r));
         }
 
       } catch (tabErr) {
