@@ -177,6 +177,7 @@ function parseExcelFile(wb) {
       // 유니크 OpenID만 저장 (중복 제거)
       const abuseOidSet = new Set();
       let parsed = 0;
+      let jpyDebug = 0;
       for (let i = headerIdx + 1; i < raw.length; i++) {
         const row = raw[i];
         const openid = String(row[ci.openid] ?? "").trim();
@@ -186,6 +187,11 @@ function parseExcelFile(wb) {
         const currency = String(row[ci.currency] ?? "KRW").trim().toUpperCase() || "KRW";
         const country = getCountry(currency);
         if (country === "기타") continue; // KRW/JPY 아닌 경우 제외
+        // JPY OpenID 로그 (처음 5개)
+        if (country === "일본" && jpyDebug < 5) {
+          console.log("[JPY악용자OpenID]", jpyDebug, "raw:", row[ci.openid], "→ string:", openid);
+          jpyDebug++;
+        }
         const resultText = String(row[ci.result] ?? "").trim();
         const hasJesae = /제재/.test(resultText);
         const hasHoesu = /회수/.test(resultText);
@@ -850,7 +856,7 @@ function Dashboard({ country, parsedData, onBack }) {
           </div>
         ):(<>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10,marginBottom:14}}>
-            <Card icon="📋" label="총 대응건수" value={fmt(filteredResp.length)} sub="Google Sheets 기준" color="#3b82f6"/>
+            <Card icon="📋" label="총 제재 대상" value={fmt(stats.totalAbuseUnique)} sub="악용자 리스트 기준" color="#3b82f6"/>
             <Card icon="✅" label="복구 완료" value={fmt(stats.respRecovered)} sub={`${stats.totalAbuseUnique?Math.round(stats.respRecovered/stats.totalAbuseUnique*100):0}%`} color="#22c55e"/>
             <Card icon="🚫" label="재제재" value={fmt(stats.respResanctioned)} sub={`${stats.totalAbuseUnique?Math.round(stats.respResanctioned/stats.totalAbuseUnique*100):0}%`} color="#ef4444"/>
           </div>
