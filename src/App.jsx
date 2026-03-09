@@ -423,6 +423,7 @@ function Dashboard({ country, parsedData, onBack }) {
   const [yearFilter, setYearFilter] = useState("전체");
   const [monthFilter, setMonthFilter] = useState("전체");
   const [csStatusTab, setCsStatusTab] = useState("");
+  const [expandedYear, setExpandedYear] = useState(null);
   const [responseData, setResponseData] = useState([]);
   const [sheetLoading, setSheetLoading] = useState(false);
   const [sheetErr, setSheetErr] = useState("");
@@ -445,18 +446,6 @@ function Dashboard({ country, parsedData, onBack }) {
       try { s = String(Math.round(parseFloat(s))); } catch(ex) {}
     }
     return s.replace(/\.0+$/, "");
-  };
-
-  // sheetOidMap에서 OpenID 조회 (정밀도 손실 대응)
-  const lookupOid = (oid, map) => {
-    const norm = normalizeOid(oid);
-    if (map[norm]) return map[norm];
-    // 앞 15자리로 재시도 (일본 구글시트 숫자 손실 대응)
-    if (norm.length > 15) {
-      const truncated = norm.slice(0, 15);
-      if (map[truncated]) return map[truncated];
-    }
-    return null;
   };
 
   const countryColor = country==="한국"?"#0ea5e9":"#f97316";
@@ -554,7 +543,7 @@ function Dashboard({ country, parsedData, onBack }) {
     });
     let respRecovered=0, respResanctioned=0;
     abuseUniqueOids.forEach(oid=>{
-      const sv=lookupOid(oid, sheetOidMap);
+      const sv=sheetOidMap[normalizeOid(oid)];
       if(!sv) return;
       if(sv.status==="복구완료") respRecovered++;
       else if(sv.status==="재제재") respResanctioned++;
@@ -580,12 +569,37 @@ function Dashboard({ country, parsedData, onBack }) {
       const year = uc?.year; if(!year) return;
       if(!g[year]) g[year]={sanctioned:0,recovered:0,resanctioned:0};
       if(a.action==="제재"||a.action==="제재+회수") g[year].sanctioned++;
-      const sv = lookupOid(normOid, sheetOidMap);
+      const sv = sheetOidMap[normOid];
       if(sv?.status==="복구완료") g[year].recovered++;
       else if(sv?.status==="재제재") g[year].resanctioned++;
     });
     return g;
   }, [allAbuseRows, allOrderRows, sheetOidMap]);
+
+  // 연도별 분석 - 월별 상세 데이터
+  const monthlyStats = useMemo(() => {
+    const g = {};
+    allOrderRows.filter(d=>d.type==="UC보유정보").forEach(d=>{
+      if(!d.year||!d.month) return;
+      if(!g[d.year]) g[d.year]={};
+      if(!g[d.year][d.month]) g[d.year][d.month]={month:d.month, orders:0, amount:0};
+      g[d.year][d.month].orders++;
+      g[d.year][d.month].amount += Math.abs(d.amount||0);
+    });
+    // OrderID 시트 금액도 합산
+    allOrderRows.filter(d=>d.type==="OrderID").forEach(d=>{
+      if(!d.year||!d.month) return;
+      if(!g[d.year]) g[d.year]={};
+      if(!g[d.year][d.month]) g[d.year][d.month]={month:d.month, orders:0, amount:0};
+      g[d.year][d.month].amount += Math.abs(d.amount||0);
+    });
+    // 각 연도별 월별 정렬
+    const result = {};
+    Object.keys(g).forEach(year => {
+      result[year] = Object.values(g[year]).sort((a,b)=>a.month.localeCompare(b.month));
+    });
+    return result;
+  }, [allOrderRows]);
 
   const monthlyChart = useMemo(() => {
     const src = yearFilter==="전체"?allOrderRows:filtered;
@@ -787,7 +801,7 @@ function Dashboard({ country, parsedData, onBack }) {
               <button onClick={()=>{
                 const rows=yearlyChart.map(row=>{
                   const yas=yearlyAbuseStats[row.year]||{sanctioned:0,recovered:0,resanctioned:0};
-                  return{"연도":row.year+"년","주문건수":row.주문건수,"제재건수":yas.sanctioned,"복구수":yas.recovered,"복구율":yas.sanctioned?Math.round(yas.recovered/yas.sanctioned*100)+"%":"0%","재제재수":yas.resanctioned,"재제재율":yas.sanctioned?Math.round(yas.resanctioned/yas.sanctioned*100)+"%":"0%"};
+                  return{"연도":row.year+"년","주문건수":row.주문건수,"제재건수":yas.sanctioned,"복구수":yas.recovered,"복구율":yas.sanctioned?Math.round(yas.recovered/yas.sanctioned*100)+"%":"0%","복구금액("+currencyCode+")":Math.round(yas.recoveredAmount||0),"재제재수":yas.resanctioned,"재제재율":yas.sanctioned?Math.round(yas.resanctioned/yas.sanctioned*100)+"%":"0%"};
                 });
                 const ws=XLSX.utils.json_to_sheet(rows);const wb2=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb2,ws,"연도별분석");XLSX.writeFile(wb2,`${country}_Google_연도별분석_${new Date().toISOString().slice(0,10)}.xlsx`);
               }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:"#16a34a",color:"#fff",cursor:"pointer",fontWeight:700,fontSize:12}}>📥 엑셀 다운로드</button>
@@ -796,7 +810,7 @@ function Dashboard({ country, parsedData, onBack }) {
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
                 <thead>
                   <tr style={{background:"#060d18",borderBottom:"1px solid #1e3a5f"}}>
-                    {[{label:"연도",color:"#2d4a6e"},{label:"주문건수",color:"#3b82f6"},{label:"제재건수",color:"#ef4444"},{label:"복구수",color:"#22c55e"},{label:"복구율",color:"#22c55e"},{label:"재제재수",color:"#f59e0b"},{label:"재제재율",color:"#f59e0b"}].map(({label,color})=>(
+                    {[{label:"연도",color:"#2d4a6e"},{label:"주문건수",color:"#3b82f6"},{label:"제재건수",color:"#ef4444"},{label:"복구수",color:"#22c55e"},{label:"복구율",color:"#22c55e"},{label:"복구금액",color:"#a78bfa"},{label:"재제재수",color:"#f59e0b"},{label:"재제재율",color:"#f59e0b"}].map(({label,color})=>(
                       <th key={label} style={{padding:"8px 10px",textAlign:"center",color,fontWeight:600,whiteSpace:"nowrap"}}>{label}</th>
                     ))}
                   </tr>
@@ -805,17 +819,59 @@ function Dashboard({ country, parsedData, onBack }) {
                   {yearlyChart.map((row,i)=>{
                     const yas=yearlyAbuseStats[row.year]||{sanctioned:0,recovered:0,resanctioned:0};
                     return(
-                      <tr key={i} style={{borderBottom:"1px solid #0a1220"}}
-                        onMouseEnter={e=>e.currentTarget.style.background="#0a1528"}
-                        onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                        <td style={{padding:"8px 10px",fontWeight:700,color:"#e8f4ff",textAlign:"center"}}>{row.year}년</td>
+                      <tr key={i}
+                        onClick={()=>setExpandedYear(expandedYear===row.year?null:row.year)}
+                        style={{borderBottom:"1px solid #0a1220",cursor:"pointer",background:expandedYear===row.year?"#0a1e3a":"transparent"}}
+                        onMouseEnter={e=>{ if(expandedYear!==row.year) e.currentTarget.style.background="#0a1528"; }}
+                        onMouseLeave={e=>{ if(expandedYear!==row.year) e.currentTarget.style.background="transparent"; }}>
+                        <td style={{padding:"8px 10px",fontWeight:700,color:"#e8f4ff",textAlign:"center"}}>
+                          <span style={{marginRight:6,color:countryColor}}>{expandedYear===row.year?"▼":"▶"}</span>{row.year}년
+                        </td>
                         <td style={{padding:"7px 10px",color:"#3b82f6",textAlign:"center",fontWeight:700}}>{fmt(row.주문건수)}</td>
                         <td style={{padding:"7px 10px",color:"#ef4444",textAlign:"center",fontWeight:700}}>{fmt(yas.sanctioned)}</td>
                         <td style={{padding:"7px 10px",color:"#22c55e",textAlign:"center",fontWeight:700}}>{fmt(yas.recovered)}</td>
                         <td style={{padding:"7px 10px",color:"#22c55e",textAlign:"center"}}>{yas.sanctioned?Math.round(yas.recovered/yas.sanctioned*100):0}%</td>
+                        <td style={{padding:"7px 10px",color:"#a78bfa",textAlign:"center",fontWeight:700}}>{currencySymbol}{fmt(Math.round(yas.recoveredAmount||0))}</td>
                         <td style={{padding:"7px 10px",color:"#f59e0b",textAlign:"center",fontWeight:700}}>{fmt(yas.resanctioned)}</td>
                         <td style={{padding:"7px 10px",color:"#f59e0b",textAlign:"center"}}>{yas.sanctioned?Math.round(yas.resanctioned/yas.sanctioned*100):0}%</td>
                       </tr>
+                      {expandedYear===row.year&&(()=>{
+                        const months = monthlyStats[row.year]||[];
+                        return(<>
+                          <tr style={{background:"#060d18"}}>
+                            <td colSpan={7} style={{padding:0}}>
+                              <div style={{padding:"10px 20px",borderBottom:"1px solid #1e3a5f"}}>
+                                <div style={{fontSize:11,color:countryColor,fontWeight:700,marginBottom:8}}>📅 {row.year}년 월별 상세</div>
+                                <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}>
+                                  <thead>
+                                    <tr style={{borderBottom:"1px solid #1e3a5f22"}}>
+                                      {["월","주문건수","환불금액"].map(h=>(
+                                        <th key={h} style={{padding:"5px 10px",textAlign:"center",color:"#2d4a6e",fontWeight:600}}>{h}</th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {months.map((m,mi)=>(
+                                      <tr key={mi} style={{borderBottom:"1px solid #0a122011"}}
+                                        onMouseEnter={e=>e.currentTarget.style.background="#0a152811"}
+                                        onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                                        <td style={{padding:"5px 10px",color:"#4a6fa5",textAlign:"center",fontWeight:600}}>{m.month}</td>
+                                        <td style={{padding:"5px 10px",color:"#3b82f6",textAlign:"center",fontWeight:700}}>{fmt(m.orders)}</td>
+                                        <td style={{padding:"5px 10px",color:"#f59e0b",textAlign:"center"}}>{currencySymbol}{fmt(Math.round(m.amount))}</td>
+                                      </tr>
+                                    ))}
+                                    <tr style={{borderTop:"1px solid #1e3a5f33",fontWeight:700}}>
+                                      <td style={{padding:"5px 10px",color:"#e8f4ff",textAlign:"center"}}>합계</td>
+                                      <td style={{padding:"5px 10px",color:"#3b82f6",textAlign:"center"}}>{fmt(months.reduce((s,m)=>s+m.orders,0))}</td>
+                                      <td style={{padding:"5px 10px",color:"#f59e0b",textAlign:"center"}}>{currencySymbol}{fmt(Math.round(months.reduce((s,m)=>s+m.amount,0)))}</td>
+                                    </tr>
+                                  </tbody>
+                                </table>
+                              </div>
+                            </td>
+                          </tr>
+                        </>);
+                      })()}
                     );
                   })}
                   {(()=>{
@@ -829,6 +885,7 @@ function Dashboard({ country, parsedData, onBack }) {
                       <td style={{padding:"7px 10px",color:"#ef4444",textAlign:"center"}}>{fmt(totSanc)}</td>
                       <td style={{padding:"7px 10px",color:"#22c55e",textAlign:"center"}}>{fmt(totRec)}</td>
                       <td style={{padding:"7px 10px",color:"#22c55e",textAlign:"center"}}>{totSanc?Math.round(totRec/totSanc*100):0}%</td>
+                      <td style={{padding:"7px 10px",color:"#a78bfa",textAlign:"center"}}>{currencySymbol}{fmt(Math.round(Object.values(yearlyAbuseStats).reduce((s,v)=>s+(v.recoveredAmount||0),0)))}</td>
                       <td style={{padding:"7px 10px",color:"#f59e0b",textAlign:"center"}}>{fmt(totRes)}</td>
                       <td style={{padding:"7px 10px",color:"#f59e0b",textAlign:"center"}}>{totSanc?Math.round(totRes/totSanc*100):0}%</td>
                     </tr>);
