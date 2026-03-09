@@ -520,9 +520,10 @@ function Dashboard({ country, parsedData, onBack }) {
       .forEach(d => {
         if (!d.openid) return;
         const key = normalizeOid(d.openid);
-        if (!map[key] || d.date >= map[key].lastDate) {
-          map[key] = { status: d.status, lastDate: d.date };
-        }
+        const val = { status: d.status, lastDate: d.date };
+        if (!map[key] || d.date >= map[key].lastDate) map[key] = val;
+        // truncatedOid도 키로 등록 (일본 OpenID 정밀도 손실 대응)
+        if (d.truncatedOid && !map[d.truncatedOid]) map[d.truncatedOid] = val;
       });
     return map;
   }, [responseData]);
@@ -950,18 +951,7 @@ function Dashboard({ country, parsedData, onBack }) {
               </table>
             </div>
           </div>
-          <div style={{background:"#0d1b2e",borderRadius:14,padding:18,border:"1px solid #1e3a5f"}}>
-            <div style={{fontSize:13,color:"#4a6fa5",fontWeight:600,marginBottom:14}}>월별 추이 {yearFilter!=="전체"?`(${yearFilter}년)`:""}</div>
-            <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={monthlyChart}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#0a1220"/>
-                <XAxis dataKey="month" tick={{fill:"#2d4a6e",fontSize:10}}/>
-                <YAxis tick={{fill:"#2d4a6e",fontSize:10}}/>
-                <Tooltip {...TT}/>
-                <Line type="monotone" dataKey="주문건수" stroke={countryColor} strokeWidth={2} dot={false}/>
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
+
         </>)}
       </>)}
 
