@@ -17,7 +17,7 @@ const GSHEET_TARGETS = {
 };
 
 const CURRENCY_COUNTRY = { KRW: "한국", JPY: "일본" };
-const STATUS_COLORS = { "복구완료": "#22c55e", "재제재": "#ef4444", "처리중": "#f59e0b" };
+const STATUS_COLORS = { "복구완료": "#22c55e", "재제재": "#ef4444" };
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // 유틸
@@ -506,15 +506,14 @@ function Dashboard({ country, parsedData, onBack }) {
       if(a.action==="제재"||a.action==="제재+회수") sanctioned++;
       if(a.action==="회수"||a.action==="제재+회수") recovered++;
     });
-    let respRecovered=0, respResanctioned=0, respProcessing=0;
+    let respRecovered=0, respResanctioned=0;
     abuseUniqueOids.forEach(oid=>{
       const sv=sheetOidMap[oid];
-      if(!sv){respProcessing++;return;}
+      if(!sv) return;
       if(sv.status==="복구완료") respRecovered++;
       else if(sv.status==="재제재") respResanctioned++;
-      else respProcessing++;
     });
-    return { totalOrders, uniqueUsers, amountTotal, totalAbuseUnique, sanctioned, recovered, respRecovered, respResanctioned, respProcessing };
+    return { totalOrders, amountTotal, totalAbuseUnique, sanctioned, recovered, respRecovered, respResanctioned };
   }, [filtered, allAbuseRows, allAbuseMap, sheetOidMap]);
 
   const yearlyChart = useMemo(() => {
@@ -556,8 +555,8 @@ function Dashboard({ country, parsedData, onBack }) {
     const g = {};
     filteredResp.forEach(d=>{
       const k=d.month||d.year; if(!k) return;
-      if(!g[k]) g[k]={month:k,복구완료:0,재제재:0,처리중:0};
-      g[k][d.status]++;
+      if(!g[k]) g[k]={month:k,복구완료:0,재제재:0};
+      if(d.status==="복구완료"||d.status==="재제재") g[k][d.status]++;
     });
     return Object.values(g).sort((a,b)=>a.month.localeCompare(b.month));
   }, [filteredResp]);
@@ -565,7 +564,7 @@ function Dashboard({ country, parsedData, onBack }) {
   const sendChat = useCallback(async () => {
     const msg=chatInput.trim(); if(!msg||chatLoading) return;
     setChatInput(""); setChatMessages(prev=>[...prev,{role:"user",content:msg}]); setChatLoading(true);
-    const ctx = { 국가:country, 플랫폼:"Google Play", 전체주문건수:allOrderRows.length, 유니크유저:stats.uniqueUsers, 환불금액:stats.amountTotal, 악용자:{유니크OpenID:stats.totalAbuseUnique,회수:stats.recovered,제재:stats.sanctioned}, 대응현황:{복구완료:stats.respRecovered,재제재:stats.respResanctioned,처리중:stats.respProcessing}, 연도별:Object.fromEntries(yearlyChart.map(d=>[d.year+"년",d.주문건수])) };
+    const ctx = { 국가:country, 플랫폼:"Google Play", 전체주문건수:allOrderRows.length, 유니크유저:stats.uniqueUsers, 환불금액:stats.amountTotal, 악용자:{유니크OpenID:stats.totalAbuseUnique,회수:stats.recovered,제재:stats.sanctioned}, 대응현황:{복구완료:stats.respRecovered,재제재:stats.respResanctioned}, 연도별:Object.fromEntries(yearlyChart.map(d=>[d.year+"년",d.주문건수])) };
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,system:`당신은 PUBG Mobile 결제취소 악용자 대응 데이터 분석 어시스턴트입니다.\n현재 대시보드: ${country} Google Play 전용\n데이터: ${JSON.stringify(ctx,null,2)}\n한국어로 간결하게 답변해주세요.`,messages:[...chatMessages.slice(1),{role:"user",content:msg}]})});
       const data=await res.json();
@@ -696,7 +695,6 @@ function Dashboard({ country, parsedData, onBack }) {
         ):(<>
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,marginBottom:16}}>
             <Card icon="📋" label="총 환불 주문" value={fmt(stats.totalOrders)} sub="건수 기준" color="#3b82f6"/>
-            <Card icon="👤" label="유니크 유저" value={fmt(stats.uniqueUsers)} sub="명" color={countryColor}/>
             <Card icon="🔄" label="회수 처리" value={fmt(stats.recovered)} sub={`${stats.totalAbuseUnique?Math.round(stats.recovered/stats.totalAbuseUnique*100):0}%`} color="#22d3ee"/>
             <Card icon="🚫" label="제재 처리" value={fmt(stats.sanctioned)} sub={`${stats.totalAbuseUnique?Math.round(stats.sanctioned/stats.totalAbuseUnique*100):0}%`} color="#ef4444"/>
             <Card icon={country==="한국"?"💰":"💴"} label="환불 금액" value={`${currencySymbol}${fmt(Math.round(stats.amountTotal))}`} sub={currencyCode} color="#f59e0b"/>
@@ -820,11 +818,10 @@ function Dashboard({ country, parsedData, onBack }) {
             <Card icon="📋" label="총 대응건수" value={fmt(filteredResp.length)} sub="행 기준" color="#3b82f6"/>
             <Card icon="✅" label="복구 완료" value={fmt(stats.respRecovered)} sub={`${stats.totalAbuseUnique?Math.round(stats.respRecovered/stats.totalAbuseUnique*100):0}%`} color="#22c55e"/>
             <Card icon="🚫" label="재제재" value={fmt(stats.respResanctioned)} sub={`${stats.totalAbuseUnique?Math.round(stats.respResanctioned/stats.totalAbuseUnique*100):0}%`} color="#ef4444"/>
-            <Card icon="⏳" label="처리중" value={fmt(stats.respProcessing)} sub={`${stats.totalAbuseUnique?Math.round(stats.respProcessing/stats.totalAbuseUnique*100):0}%`} color="#f59e0b"/>
           </div>
           <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
-            {[["복구완료","#22c55e"],["재제재","#ef4444"],["처리중","#f59e0b"]].map(([s,c])=>{
-              const cnt=s==="복구완료"?stats.respRecovered:s==="재제재"?stats.respResanctioned:stats.respProcessing;
+            {[["복구완료","#22c55e"],["재제재","#ef4444"]].map(([s,c])=>{
+              const cnt=s==="복구완료"?stats.respRecovered:stats.respResanctioned;
               return(<button key={s} onClick={()=>setCsStatusTab(csStatusTab===s?"":s)}
                 style={{padding:"10px 22px",borderRadius:10,border:`2px solid ${csStatusTab===s?c:"#1e3a5f"}`,background:csStatusTab===s?c+"22":"#0d1b2e",color:csStatusTab===s?c:"#4a6fa5",fontWeight:700,fontSize:12,cursor:"pointer"}}>
                 {s==="복구완료"?"✅":s==="재제재"?"🚫":"⏳"} {s} ({fmt(cnt)})
@@ -879,7 +876,6 @@ function Dashboard({ country, parsedData, onBack }) {
                   <Tooltip {...TT}/><Legend wrapperStyle={{fontSize:11}}/>
                   <Bar dataKey="복구완료" fill="#22c55e" stackId="a"/>
                   <Bar dataKey="재제재" fill="#ef4444" stackId="a"/>
-                  <Bar dataKey="처리중" fill="#f59e0b" stackId="a"/>
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -887,13 +883,13 @@ function Dashboard({ country, parsedData, onBack }) {
               <div style={{fontSize:13,color:"#4a6fa5",fontWeight:600,marginBottom:14}}>처리 결과 비율</div>
               <ResponsiveContainer width="100%" height={160}>
                 <PieChart>
-                  <Pie data={[{name:"복구완료",value:stats.respRecovered},{name:"재제재",value:stats.respResanctioned},{name:"처리중",value:stats.respProcessing}].filter(d=>d.value>0)} cx="50%" cy="50%" innerRadius={45} outerRadius={65} dataKey="value" paddingAngle={3}>
+                  <Pie data={[{name:"복구완료",value:stats.respRecovered},{name:"재제재",value:stats.respResanctioned}].filter(d=>d.value>0)} cx="50%" cy="50%" innerRadius={45} outerRadius={65} dataKey="value" paddingAngle={3}>
                     {[{color:"#22c55e"},{color:"#ef4444"},{color:"#f59e0b"}].map((e,i)=><Cell key={i} fill={e.color}/>)}
                   </Pie>
                   <Tooltip {...TT}/>
                 </PieChart>
               </ResponsiveContainer>
-              {[["복구완료",stats.respRecovered,"#22c55e"],["재제재",stats.respResanctioned,"#ef4444"],["처리중",stats.respProcessing,"#f59e0b"]].map(([l,v,c])=>(
+              {[["복구완료",stats.respRecovered,"#22c55e"],["재제재",stats.respResanctioned,"#ef4444"]].map(([l,v,c])=>(
                 <div key={l} style={{display:"flex",alignItems:"center",gap:8,fontSize:12,marginTop:6}}>
                   <div style={{width:8,height:8,borderRadius:"50%",background:c}}/>
                   <span style={{color:"#2d4a6e"}}>{l}</span>
