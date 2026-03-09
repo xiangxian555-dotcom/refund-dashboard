@@ -603,10 +603,11 @@ function Dashboard({ country, parsedData, onBack }) {
       if(!g[yr]) g[yr]={};
       if(!g[yr][mo]) g[yr][mo]={month:mo,orders:0,amount:0,sanctioned:0,recovered:0,resanctioned:0,recoveredAmount:0};
       if(a.action==="제재"||a.action==="제재+회수") g[yr][mo].sanctioned++;
-      const sv = lookupOid(normOid, sheetOidMap);
+      // lookupOid 직접 구현 (선언 순서 문제 회피)
+      const svKey = sheetOidMap[normOid] ? normOid : (normOid.length>15 ? normOid.slice(0,15) : null);
+      const sv = svKey ? sheetOidMap[svKey] : null;
       if(sv?.status==="복구완료") {
         g[yr][mo].recovered++;
-        // 복구완료 OpenID의 환불금액
         const ucRows = allOrderRows.filter(d=>normalizeOid(d.openid)===normOid&&d.type==="UC보유정보");
         g[yr][mo].recoveredAmount += ucRows.reduce((s,d)=>s+Math.abs(d.amount||0),0);
       } else if(sv?.status==="재제재") g[yr][mo].resanctioned++;
