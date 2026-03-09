@@ -212,6 +212,9 @@ export default async function handler(req, res) {
             if (!rawOid && rawOid !== 0) continue;
             const openid = String(rawOid).trim().replace(/\.0+$/, "");
             if (!openid) continue;
+            // 일본 OpenID는 숫자 정밀도 손실로 15~16자리로 잘릴 수 있음
+            // truncatedOid: 앞 15자리 (매칭용)
+            const truncatedOid = openid.length >= 15 ? openid.slice(0, 15) : openid;
 
             const yText = String(row[yColIdx] || "").trim();
             const status = classifyJapan(yText);
@@ -221,6 +224,7 @@ export default async function handler(req, res) {
 
             allRows.push({
               openid,
+              truncatedOid, // 앞 15자리 (엑셀 OpenID 매칭용)
               country: tab.country,
               platform: tab.platform,
               date,
