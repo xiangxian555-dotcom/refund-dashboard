@@ -98,6 +98,7 @@ export default async function handler(req, res) {
         const response = await sheets.spreadsheets.values.get({
           spreadsheetId: SHEET_ID,
           range: tab.name,
+          valueRenderOption: "FORMATTED_VALUE", // 숫자도 문자열로 받아 정밀도 손실 방지
         });
 
         const rows = response.data.values || [];
@@ -204,19 +205,15 @@ export default async function handler(req, res) {
           }
           console.log("[일본시트] 헤더수:", headers.length, "코멘트열:", yColIdx, "헤더:", headers[yColIdx]);
 
-          // 처음 3개 OpenID 로그 (디버깅용)
-          let debugCount = 0;
-
           // 전체 행 저장 (중복 제거 없음 — 히스토리 전체 보존)
           for (let i = headerIdx + 1; i < rows.length; i++) {
             const row = rows[i];
-            const openid = String(row[ci.openid] || "").trim();
+            // OpenID: 구글 시트에서 큰 숫자가 부동소수점으로 손실될 수 있어서
+            // 원본 raw 값을 그대로 문자열로 사용
+            const rawOid = row[ci.openid];
+            if (!rawOid && rawOid !== 0) continue;
+            const openid = String(rawOid).trim().replace(/\.0+$/, "");
             if (!openid) continue;
-
-            if (debugCount < 3) {
-              console.log("[일본OpenID]", debugCount, "raw:", row[ci.openid], "→ string:", openid);
-              debugCount++;
-            }
 
             const yText = String(row[yColIdx] || "").trim();
             const status = classifyJapan(yText);
