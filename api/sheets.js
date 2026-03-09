@@ -88,6 +88,7 @@ export default async function handler(req, res) {
         });
 
         const rows = response.data.values || [];
+        console.log(`[${tab.name}] 로드된 행 수: ${rows.length}`);
         if (rows.length < 2) continue;
 
         const isJapan = tab.country === "일본";
@@ -121,6 +122,8 @@ export default async function handler(req, res) {
             oCol: 14, // O열 (0-based index 14)
           };
 
+          // OpenID별 마지막 행만 유지 (중복 제거)
+          const koreaMap = {}; // openid → {status, date, resultText}
           for (let i = headerIdx + 1; i < rows.length; i++) {
             const row = rows[i];
             const openid = String(row[ci.openid] || "").trim();
@@ -130,13 +133,13 @@ export default async function handler(req, res) {
             const oText = String(row[ci.oCol] || "").trim();
             const status = classifyKorea(nText, oText);
 
-            // 처리중(null)은 제외 — 복구완료/재제재만 포함
+            // 처리 결과가 있는 행만 저장 (마지막 행으로 덮어씀)
             if (!status) continue;
 
             const dateRaw = String(row[ci.date] || "").trim();
             const date = parseDate(dateRaw);
 
-            allRows.push({
+            koreaMap[openid] = {
               openid,
               country: tab.country,
               platform: tab.platform,
@@ -146,16 +149,18 @@ export default async function handler(req, res) {
               resultText: oText || nText,
               status,
               segment: `${tab.platform}_${tab.country}`,
-            });
+            };
           }
+          // 중복 제거된 결과를 allRows에 추가
+          Object.values(koreaMap).forEach(r => allRows.push(r));
         }
 
         // ━━━ 일본 시트 파싱 ━━━
         else {
-          // 헤더 행 찾기
+          // 헤더 행 찾기 (4행에 헤더 있음)
           let headerIdx = 0;
           for (let i = 0; i < Math.min(8, rows.length); i++) {
-            if (rows[i].some(c => /openid|オープン|キャラ|open/i.test(c || ""))) {
+            if (rows[i].some(c => /openid|オープン|OPEN|open/i.test(c || ""))) {
               headerIdx = i; break;
             }
           }
@@ -170,14 +175,15 @@ export default async function handler(req, res) {
           };
 
           const ci = {
-            openid: findCol("openid", "オープン", "OPEN ID", "open id") >= 0
-              ? findCol("openid", "オープン", "OPEN ID", "open id") : 3, // D열 기본값
+            // E열(index 4) = OPEN ID
+            openid: findCol("OPEN ID", "openid", "オープン") >= 0
+              ? findCol("OPEN ID", "openid", "オープン") : 4,
+            // B열(index 1) = 抽出期間
             date: findCol("抽出期間", "期間", "date", "기간") >= 0
-              ? findCol("抽出期間", "期間", "date", "기간") : 1, // B열 기본값
-            yCol: 24, // Y열 (0-based index 24) — コメント
+              ? findCol("抽出期間", "期間", "date", "기간") : 1,
           };
 
-          // Y열 헤더 위치 동적으로 찾기
+          // Y열 = コメント (index 24) — 동적으로 찾기
           let yColIdx = 24;
           for (let c = 0; c < headers.length; c++) {
             if (/コメント|comment/i.test(headers[c] || "")) {
@@ -185,6 +191,8 @@ export default async function handler(req, res) {
             }
           }
 
+          // OpenID별 마지막 행만 유지 (중복 제거)
+          const japanMap = {};
           for (let i = headerIdx + 1; i < rows.length; i++) {
             const row = rows[i];
             const openid = String(row[ci.openid] || "").trim();
@@ -193,13 +201,13 @@ export default async function handler(req, res) {
             const yText = String(row[yColIdx] || "").trim();
             const status = classifyJapan(yText);
 
-            // 처리중(null)은 제외 — 복구완료/재제재만 포함
+            // 처리 결과가 있는 행만 저장 (마지막 행으로 덮어씀)
             if (!status) continue;
 
             const dateRaw = String(row[ci.date] || "").trim();
             const date = parseDate(dateRaw);
 
-            allRows.push({
+            japanMap[openid] = {
               openid,
               country: tab.country,
               platform: tab.platform,
@@ -209,8 +217,10 @@ export default async function handler(req, res) {
               resultText: yText,
               status,
               segment: `${tab.platform}_${tab.country}`,
-            });
+            };
           }
+          // 중복 제거된 결과를 allRows에 추가
+          Object.values(japanMap).forEach(r => allRows.push(r));
         }
 
       } catch (tabErr) {
