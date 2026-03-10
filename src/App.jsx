@@ -323,39 +323,37 @@ function parseGSheetCSV(text, country) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // ━━━ 호버 툴팁 컴포넌트 ━━━
 function HoverTooltip({ children, lines, maxH=320 }) {
-  const [show, setShow] = useState(false);
-  const [pos, setPos] = useState({x:0,y:0});
-  const ref = useRef(null);
-  const handleMove = (e) => {
-    const r = ref.current?.getBoundingClientRect();
-    if (!r) return;
-    setPos({ x: e.clientX - r.left + 14, y: e.clientY - r.top + 14 });
-  };
+  const [pos, setPos] = useState(null);
+  const handleEnter = (e) => setPos({ x: e.clientX, y: e.clientY });
+  const handleMove  = (e) => setPos({ x: e.clientX, y: e.clientY });
+  const handleLeave = ()  => setPos(null);
+  const tipW = 360;
+  const tipLeft = pos ? Math.min(pos.x + 14, window.innerWidth - tipW - 10) : 0;
+  const tipTop  = pos ? (pos.y + 14 + maxH > window.innerHeight ? pos.y - maxH - 8 : pos.y + 14) : 0;
   return (
-    <span ref={ref} style={{position:"relative",cursor:"help"}}
-      onMouseEnter={()=>setShow(true)}
-      onMouseLeave={()=>setShow(false)}
+    <span style={{position:"relative",cursor:"help"}}
+      onMouseEnter={handleEnter}
+      onMouseLeave={handleLeave}
       onMouseMove={handleMove}>
       {children}
-      {show && lines && lines.length > 0 && (
+      {pos && lines && lines.length > 0 && (
         <div style={{
           position:"fixed", zIndex:99999,
-          left: pos.x + (ref.current?.getBoundingClientRect().left||0),
-          top:  pos.y + (ref.current?.getBoundingClientRect().top||0),
-          background:"#060d18", border:"1px solid #3b82f644",
-          borderRadius:10, padding:"10px 14px", minWidth:260, maxWidth:380,
-          boxShadow:"0 8px 32px rgba(0,0,0,0.7)", pointerEvents:"none",
+          left: tipLeft, top: tipTop,
+          background:"#060d18", border:"1px solid #3b82f666",
+          borderRadius:10, padding:"10px 14px", width:tipW,
+          boxShadow:"0 8px 32px rgba(0,0,0,0.8)", pointerEvents:"none",
           maxHeight: maxH, overflowY:"auto",
         }}>
           {lines.map((line,i)=>(
             <div key={i} style={{
-              fontSize:10, color: line.color||"#c8d8f0",
-              borderBottom: i<lines.length-1?"1px solid #1e3a5f22":"none",
-              padding:"4px 0", fontFamily: line.mono?"monospace":"inherit",
+              fontSize:10,
+              borderBottom: i<lines.length-1?"1px solid #1e3a5f33":"none",
+              padding:"4px 0",
               display:"flex", justifyContent:"space-between", gap:12,
             }}>
-              <span style={{color:"#4a6fa5",flexShrink:0}}>{line.label}</span>
-              <span style={{color:line.color||"#c8d8f0",wordBreak:"break-all",textAlign:"right"}}>{line.value}</span>
+              <span style={{color:"#4a6fa5",flexShrink:0,fontFamily:line.mono?"monospace":"inherit"}}>{line.label}</span>
+              <span style={{color:line.color||"#c8d8f0",wordBreak:"break-all",textAlign:"right",fontFamily:line.mono?"monospace":"inherit"}}>{line.value}</span>
             </div>
           ))}
         </div>
