@@ -647,7 +647,7 @@ function Dashboard({ country, parsedData, onBack }) {
     allOrderRows.filter(d=>d.type==="UC보유정보").forEach(d=>{
       if(!d.year||!d.month) return;
       if(!g[d.year]) g[d.year]={};
-      if(!g[d.year][d.month]) g[d.year][d.month]={month:d.month,orders:0,amount:0,sanctioned:0,recovered:0,resanctioned:0,recoveredAmount:0};
+      if(!g[d.year][d.month]) g[d.year][d.month]={month:d.month,orders:0,amount:0,sanctioned:0,recovered:0,resanctioned:0,recoveredAmount:0,recoveredOids:[],recoveredOrders:[]};
       g[d.year][d.month].orders++;
       g[d.year][d.month].amount += Math.abs(d.amount||0);
     });
@@ -655,7 +655,7 @@ function Dashboard({ country, parsedData, onBack }) {
     allOrderRows.filter(d=>d.type==="OrderID").forEach(d=>{
       if(!d.year||!d.month) return;
       if(!g[d.year]) g[d.year]={};
-      if(!g[d.year][d.month]) g[d.year][d.month]={month:d.month,orders:0,amount:0,sanctioned:0,recovered:0,resanctioned:0,recoveredAmount:0};
+      if(!g[d.year][d.month]) g[d.year][d.month]={month:d.month,orders:0,amount:0,sanctioned:0,recovered:0,resanctioned:0,recoveredAmount:0,recoveredOids:[],recoveredOrders:[]};
       g[d.year][d.month].amount += Math.abs(d.amount||0);
     });
     // 악용자 리스트 제재/복구 집계 (월별)
