@@ -321,6 +321,49 @@ function parseGSheetCSV(text, country) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // Card 컴포넌트
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ━━━ 호버 툴팁 컴포넌트 ━━━
+function HoverTooltip({ children, lines, maxH=320 }) {
+  const [show, setShow] = useState(false);
+  const [pos, setPos] = useState({x:0,y:0});
+  const ref = useRef(null);
+  const handleMove = (e) => {
+    const r = ref.current?.getBoundingClientRect();
+    if (!r) return;
+    setPos({ x: e.clientX - r.left + 14, y: e.clientY - r.top + 14 });
+  };
+  return (
+    <span ref={ref} style={{position:"relative",cursor:"help"}}
+      onMouseEnter={()=>setShow(true)}
+      onMouseLeave={()=>setShow(false)}
+      onMouseMove={handleMove}>
+      {children}
+      {show && lines && lines.length > 0 && (
+        <div style={{
+          position:"fixed", zIndex:99999,
+          left: pos.x + (ref.current?.getBoundingClientRect().left||0),
+          top:  pos.y + (ref.current?.getBoundingClientRect().top||0),
+          background:"#060d18", border:"1px solid #3b82f644",
+          borderRadius:10, padding:"10px 14px", minWidth:260, maxWidth:380,
+          boxShadow:"0 8px 32px rgba(0,0,0,0.7)", pointerEvents:"none",
+          maxHeight: maxH, overflowY:"auto",
+        }}>
+          {lines.map((line,i)=>(
+            <div key={i} style={{
+              fontSize:10, color: line.color||"#c8d8f0",
+              borderBottom: i<lines.length-1?"1px solid #1e3a5f22":"none",
+              padding:"4px 0", fontFamily: line.mono?"monospace":"inherit",
+              display:"flex", justifyContent:"space-between", gap:12,
+            }}>
+              <span style={{color:"#4a6fa5",flexShrink:0}}>{line.label}</span>
+              <span style={{color:line.color||"#c8d8f0",wordBreak:"break-all",textAlign:"right"}}>{line.value}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </span>
+  );
+}
+
 const Card = ({ icon, label, value, sub, color="#3b82f6" }) => (
   <div style={{ background:"linear-gradient(135deg,#0d1b2e,#0a1220)", borderRadius:14, padding:"16px 18px", border:`1px solid ${color}33`, borderLeft:`4px solid ${color}`, position:"relative", overflow:"hidden" }}>
     <div style={{ position:"absolute", top:-10, right:-10, width:70, height:70, background:`radial-gradient(circle,${color}18,transparent 70%)`, borderRadius:"50%" }}/>
@@ -577,19 +620,21 @@ function Dashboard({ country, parsedData, onBack }) {
       const normOid = normalizeOid(a.openid);
       const uc = allOrderRows.find(d=>normalizeOid(d.openid)===normOid&&d.type==="UC보유정보");
       const year = uc?.year; if(!year) return;
-      if(!g[year]) g[year]={sanctioned:0,recovered:0,resanctioned:0,recoveredAmount:0};
+      if(!g[year]) g[year]={sanctioned:0,recovered:0,resanctioned:0,recoveredAmount:0,recoveredOids:[],recoveredOrders:[]};
       if(a.action==="제재"||a.action==="제재+회수") g[year].sanctioned++;
-      // sheetOidMap 키 조회 (일본 OpenID 정밀도 손실 대응)
       const svKey = sheetOidMap[normOid] ? normOid : (normOid.length>15 ? normOid.slice(0,15) : null);
       const sv = svKey ? sheetOidMap[svKey] : null;
       if(sv?.status==="복구완료") {
         g[year].recovered++;
-        // 복구된 OpenID의 UC보유정보에서 주문번호 목록 추출
-        // → OrderID 시트에서 해당 주문번호의 금액 합산 (없으면 UC보유정보 amount 폴백)
+        g[year].recoveredOids.push(a.openid); // 툴팁용 OpenID 저장
         const ucRows = allOrderRows.filter(d=>normalizeOid(d.openid)===normOid&&d.type==="UC보유정보");
         const amt = ucRows.reduce((s,d)=>{
           const orderAmt = d.orderNo ? (orderIdAmountMap[d.orderNo]||0) : 0;
-          return s + (orderAmt > 0 ? orderAmt : Math.abs(d.amount||0));
+          const finalAmt = orderAmt > 0 ? orderAmt : Math.abs(d.amount||0);
+          if(d.orderNo) g[year].recoveredOrders.push({ // 툴팁용 주문 저장
+            openid: a.openid, orderNo: d.orderNo, amount: finalAmt
+          });
+          return s + finalAmt;
         }, 0);
         g[year].recoveredAmount += amt;
       } else if(sv?.status==="재제재") g[year].resanctioned++;
@@ -622,18 +667,21 @@ function Dashboard({ country, parsedData, onBack }) {
       if(!ucRow?.year||!ucRow?.month) return;
       const yr=ucRow.year, mo=ucRow.month;
       if(!g[yr]) g[yr]={};
-      if(!g[yr][mo]) g[yr][mo]={month:mo,orders:0,amount:0,sanctioned:0,recovered:0,resanctioned:0,recoveredAmount:0};
+      if(!g[yr][mo]) g[yr][mo]={month:mo,orders:0,amount:0,sanctioned:0,recovered:0,resanctioned:0,recoveredAmount:0,recoveredOids:[],recoveredOrders:[]};
       if(a.action==="제재"||a.action==="제재+회수") g[yr][mo].sanctioned++;
       // lookupOid 직접 구현 (선언 순서 문제 회피)
       const svKey = sheetOidMap[normOid] ? normOid : (normOid.length>15 ? normOid.slice(0,15) : null);
       const sv = svKey ? sheetOidMap[svKey] : null;
       if(sv?.status==="복구완료") {
         g[yr][mo].recovered++;
+        g[yr][mo].recoveredOids.push(a.openid);
         // 복구된 OpenID의 UC보유정보 주문번호 → OrderID 시트 금액 합산 (없으면 UC amount 폴백)
         const ucRows = allOrderRows.filter(d=>normalizeOid(d.openid)===normOid&&d.type==="UC보유정보");
         g[yr][mo].recoveredAmount += ucRows.reduce((s,d)=>{
           const orderAmt = d.orderNo ? (orderIdAmountMap[d.orderNo]||0) : 0;
-          return s + (orderAmt > 0 ? orderAmt : Math.abs(d.amount||0));
+          const finalAmt = orderAmt > 0 ? orderAmt : Math.abs(d.amount||0);
+          if(d.orderNo) g[yr][mo].recoveredOrders.push({openid:a.openid, orderNo:d.orderNo, amount:finalAmt});
+          return s + finalAmt;
         }, 0);
       } else if(sv?.status==="재제재") g[yr][mo].resanctioned++;
     });
@@ -913,9 +961,23 @@ function Dashboard({ country, parsedData, onBack }) {
                         </td>
                         <td style={{padding:"7px 10px",color:"#3b82f6",textAlign:"center",fontWeight:700}}>{fmt(row.주문건수)}</td>
                         <td style={{padding:"7px 10px",color:"#ef4444",textAlign:"center",fontWeight:700}}>{fmt(yas.sanctioned)}</td>
-                        <td style={{padding:"7px 10px",color:"#22c55e",textAlign:"center",fontWeight:700}}>{fmt(yas.recovered)}</td>
+                        <td style={{padding:"7px 10px",color:"#22c55e",textAlign:"center",fontWeight:700}}>
+                          <HoverTooltip lines={[
+                            {label:"✅ 복구완료 OpenID 목록", value:`총 ${(yas.recoveredOids||[]).length}명`, color:"#22c55e"},
+                            ...(yas.recoveredOids||[]).map((oid,i)=>({label:`${i+1}.`, value:oid, color:"#c8d8f0", mono:true}))
+                          ]}>
+                            {fmt(yas.recovered)}
+                          </HoverTooltip>
+                        </td>
                         <td style={{padding:"7px 10px",color:"#22c55e",textAlign:"center"}}>{yas.sanctioned?Math.round(yas.recovered/yas.sanctioned*100):0}%</td>
-                        <td style={{padding:"7px 10px",color:"#a78bfa",textAlign:"center",fontWeight:700}}>{currencySymbol}{fmt(Math.round(yas.recoveredAmount||0))}</td>
+                        <td style={{padding:"7px 10px",color:"#a78bfa",textAlign:"center",fontWeight:700}}>
+                          <HoverTooltip lines={[
+                            {label:"💰 복구금액 주문 상세", value:`총 ${currencySymbol}${fmt(Math.round(yas.recoveredAmount||0))}`, color:"#a78bfa"},
+                            ...(yas.recoveredOrders||[]).map((o,i)=>({label:o.orderNo||`주문${i+1}`, value:`${o.openid?.slice(0,10)}… ${currencySymbol}${fmt(Math.round(o.amount))}`, color:"#c8d8f0", mono:true}))
+                          ]}>
+                            {currencySymbol}{fmt(Math.round(yas.recoveredAmount||0))}
+                          </HoverTooltip>
+                        </td>
                         <td style={{padding:"7px 10px",color:"#f59e0b",textAlign:"center",fontWeight:700}}>{fmt(yas.resanctioned)}</td>
                         <td style={{padding:"7px 10px",color:"#f59e0b",textAlign:"center"}}>{yas.sanctioned?Math.round(yas.resanctioned/yas.sanctioned*100):0}%</td>
                       </tr>
@@ -939,9 +1001,23 @@ function Dashboard({ country, parsedData, onBack }) {
                                     <td style={{padding:"5px 8px",color:"#4a6fa5",textAlign:"center",fontWeight:600}}>{m.month}</td>
                                     <td style={{padding:"5px 8px",color:"#3b82f6",textAlign:"center",fontWeight:700}}>{fmt(m.orders)}</td>
                                     <td style={{padding:"5px 8px",color:"#ef4444",textAlign:"center"}}>{fmt(m.sanctioned||0)}</td>
-                                    <td style={{padding:"5px 8px",color:"#22c55e",textAlign:"center",fontWeight:700}}>{fmt(m.recovered||0)}</td>
+                                    <td style={{padding:"5px 8px",color:"#22c55e",textAlign:"center",fontWeight:700}}>
+                                      <HoverTooltip lines={[
+                                        {label:"✅ 복구 OpenID", value:`${(m.recoveredOids||[]).length}명`, color:"#22c55e"},
+                                        ...(m.recoveredOids||[]).map((oid,i)=>({label:`${i+1}.`, value:oid, color:"#c8d8f0", mono:true}))
+                                      ]}>
+                                        {fmt(m.recovered||0)}
+                                      </HoverTooltip>
+                                    </td>
                                     <td style={{padding:"5px 8px",color:"#22c55e",textAlign:"center"}}>{m.sanctioned?Math.round((m.recovered||0)/m.sanctioned*100):0}%</td>
-                                    <td style={{padding:"5px 8px",color:"#a78bfa",textAlign:"center"}}>{currencySymbol}{fmt(Math.round(m.recoveredAmount||0))}</td>
+                                    <td style={{padding:"5px 8px",color:"#a78bfa",textAlign:"center"}}>
+                                      <HoverTooltip lines={[
+                                        {label:"💰 주문 상세", value:`${currencySymbol}${fmt(Math.round(m.recoveredAmount||0))}`, color:"#a78bfa"},
+                                        ...(m.recoveredOrders||[]).map((o,i)=>({label:o.orderNo||`주문${i+1}`, value:`${o.openid?.slice(0,10)}… ${currencySymbol}${fmt(Math.round(o.amount))}`, color:"#c8d8f0", mono:true}))
+                                      ]}>
+                                        {currencySymbol}{fmt(Math.round(m.recoveredAmount||0))}
+                                      </HoverTooltip>
+                                    </td>
                                     <td style={{padding:"5px 8px",color:"#f59e0b",textAlign:"center"}}>{fmt(m.resanctioned||0)}</td>
                                     <td style={{padding:"5px 8px",color:"#f59e0b",textAlign:"center"}}>{m.sanctioned?Math.round((m.resanctioned||0)/m.sanctioned*100):0}%</td>
                                   </tr>
