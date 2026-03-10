@@ -562,20 +562,40 @@ function Dashboard({ country, parsedData, onBack }) {
     return Object.values(g).sort((a,b)=>a.year.localeCompare(b.year));
   }, [allOrderRows]);
 
+  // OrderID 시트 rows를 orderNo 기준으로 빠르게 조회하기 위한 맵
+  const orderIdAmountMap = useMemo(() => {
+    const map = {};
+    allOrderRows.filter(d=>d.type==="OrderID"&&d.orderNo).forEach(d=>{
+      map[d.orderNo] = Math.abs(d.amount||0);
+    });
+    return map;
+  }, [allOrderRows]);
+
   const yearlyAbuseStats = useMemo(() => {
     const g = {};
     allAbuseRows.forEach(a=>{
       const normOid = normalizeOid(a.openid);
       const uc = allOrderRows.find(d=>normalizeOid(d.openid)===normOid&&d.type==="UC보유정보");
       const year = uc?.year; if(!year) return;
-      if(!g[year]) g[year]={sanctioned:0,recovered:0,resanctioned:0};
+      if(!g[year]) g[year]={sanctioned:0,recovered:0,resanctioned:0,recoveredAmount:0};
       if(a.action==="제재"||a.action==="제재+회수") g[year].sanctioned++;
-      const sv = sheetOidMap[normOid];
-      if(sv?.status==="복구완료") g[year].recovered++;
-      else if(sv?.status==="재제재") g[year].resanctioned++;
+      // sheetOidMap 키 조회 (일본 OpenID 정밀도 손실 대응)
+      const svKey = sheetOidMap[normOid] ? normOid : (normOid.length>15 ? normOid.slice(0,15) : null);
+      const sv = svKey ? sheetOidMap[svKey] : null;
+      if(sv?.status==="복구완료") {
+        g[year].recovered++;
+        // 복구된 OpenID의 UC보유정보에서 주문번호 목록 추출
+        // → OrderID 시트에서 해당 주문번호의 금액 합산 (없으면 UC보유정보 amount 폴백)
+        const ucRows = allOrderRows.filter(d=>normalizeOid(d.openid)===normOid&&d.type==="UC보유정보");
+        const amt = ucRows.reduce((s,d)=>{
+          const orderAmt = d.orderNo ? (orderIdAmountMap[d.orderNo]||0) : 0;
+          return s + (orderAmt > 0 ? orderAmt : Math.abs(d.amount||0));
+        }, 0);
+        g[year].recoveredAmount += amt;
+      } else if(sv?.status==="재제재") g[year].resanctioned++;
     });
     return g;
-  }, [allAbuseRows, allOrderRows, sheetOidMap]);
+  }, [allAbuseRows, allOrderRows, sheetOidMap, orderIdAmountMap]);
 
   // 연도별 분석 - 월별 상세 데이터
   const monthlyStats = useMemo(() => {
@@ -609,8 +629,12 @@ function Dashboard({ country, parsedData, onBack }) {
       const sv = svKey ? sheetOidMap[svKey] : null;
       if(sv?.status==="복구완료") {
         g[yr][mo].recovered++;
+        // 복구된 OpenID의 UC보유정보 주문번호 → OrderID 시트 금액 합산 (없으면 UC amount 폴백)
         const ucRows = allOrderRows.filter(d=>normalizeOid(d.openid)===normOid&&d.type==="UC보유정보");
-        g[yr][mo].recoveredAmount += ucRows.reduce((s,d)=>s+Math.abs(d.amount||0),0);
+        g[yr][mo].recoveredAmount += ucRows.reduce((s,d)=>{
+          const orderAmt = d.orderNo ? (orderIdAmountMap[d.orderNo]||0) : 0;
+          return s + (orderAmt > 0 ? orderAmt : Math.abs(d.amount||0));
+        }, 0);
       } else if(sv?.status==="재제재") g[yr][mo].resanctioned++;
     });
     const result = {};
@@ -618,7 +642,7 @@ function Dashboard({ country, parsedData, onBack }) {
       result[year] = Object.values(g[year]).sort((a,b)=>a.month.localeCompare(b.month));
     });
     return result;
-  }, [allOrderRows, allAbuseRows, sheetOidMap]);
+  }, [allOrderRows, allAbuseRows, sheetOidMap, orderIdAmountMap]);
 
   const monthlyChart = useMemo(() => {
     const src = yearFilter==="전체"?allOrderRows:filtered;
