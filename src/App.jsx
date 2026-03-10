@@ -322,40 +322,100 @@ function parseGSheetCSV(text, country) {
 // Card 컴포넌트
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // ━━━ 호버 툴팁 컴포넌트 ━━━
-function HoverTooltip({ children, lines, maxH=320 }) {
-  const [pos, setPos] = useState(null);
-  const handleEnter = (e) => setPos({ x: e.clientX, y: e.clientY });
-  const handleMove  = (e) => setPos({ x: e.clientX, y: e.clientY });
-  const handleLeave = ()  => setPos(null);
-  const tipW = 360;
-  const tipLeft = pos ? Math.min(pos.x + 14, window.innerWidth - tipW - 10) : 0;
-  const tipTop  = pos ? (pos.y + 14 + maxH > window.innerHeight ? pos.y - maxH - 8 : pos.y + 14) : 0;
+function HoverTooltip({ children, lines, maxH=340 }) {
+  const [hoverPos, setHoverPos] = useState(null);
+  const [pinned,   setPinned]   = useState(null); // 고정된 툴팁
+  const tipW = 400;
+
+  const calcPos = (cx, cy) => ({
+    x: Math.min(cx + 14, window.innerWidth  - tipW - 10),
+    y: cy + 14 + maxH > window.innerHeight  ? cy - maxH - 8 : cy + 14,
+  });
+
+  const handleMove  = (e) => { if (!pinned) setHoverPos(calcPos(e.clientX, e.clientY)); };
+  const handleLeave = ()  => { if (!pinned) setHoverPos(null); };
+  const handleClick = (e) => {
+    e.stopPropagation();
+    if (pinned) { setPinned(null); }               // 이미 고정 → 해제
+    else        { setPinned(calcPos(e.clientX, e.clientY)); setHoverPos(null); }
+  };
+
+  // 전역 클릭으로 고정 해제
+  useEffect(() => {
+    if (!pinned) return;
+    const close = () => setPinned(null);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [pinned]);
+
+  const activePos = pinned || hoverPos;
+  const isPinned  = !!pinned;
+
+  const copyAll = (e) => {
+    e.stopPropagation();
+    const text = lines.map(l => `${l.label}\t${l.value}`).join("\n");
+    navigator.clipboard?.writeText(text).then(()=>{ /* ok */ });
+  };
+
   return (
-    <span style={{position:"relative",cursor:"help"}}
-      onMouseEnter={handleEnter}
+    <span style={{position:"relative", cursor: isPinned ? "default" : "help"}}
+      onMouseMove={handleMove}
       onMouseLeave={handleLeave}
-      onMouseMove={handleMove}>
+      onClick={handleClick}>
+      {/* 고정 중이면 셀에 표시 */}
+      <span style={{
+        display:"inline-block", verticalAlign:"middle",
+        fontSize:9, marginLeft:3, color: isPinned ? "#f59e0b" : "transparent",
+        transition:"color 0.15s",
+      }}>📌</span>
       {children}
-      {pos && lines && lines.length > 0 && (
-        <div style={{
-          position:"fixed", zIndex:99999,
-          left: tipLeft, top: tipTop,
-          background:"#060d18", border:"1px solid #3b82f666",
-          borderRadius:10, padding:"10px 14px", width:tipW,
-          boxShadow:"0 8px 32px rgba(0,0,0,0.8)", pointerEvents:"none",
-          maxHeight: maxH, overflowY:"auto",
-        }}>
-          {lines.map((line,i)=>(
-            <div key={i} style={{
-              fontSize:10,
-              borderBottom: i<lines.length-1?"1px solid #1e3a5f33":"none",
-              padding:"4px 0",
-              display:"flex", justifyContent:"space-between", gap:12,
-            }}>
-              <span style={{color:"#4a6fa5",flexShrink:0,fontFamily:line.mono?"monospace":"inherit"}}>{line.label}</span>
-              <span style={{color:line.color||"#c8d8f0",wordBreak:"break-all",textAlign:"right",fontFamily:line.mono?"monospace":"inherit"}}>{line.value}</span>
-            </div>
-          ))}
+      {activePos && lines && lines.length > 0 && (
+        <div
+          onClick={e => e.stopPropagation()}
+          style={{
+            position:"fixed", zIndex:99999,
+            left: activePos.x, top: activePos.y,
+            background:"#0a1220", border:`1px solid ${isPinned?"#f59e0b88":"#3b82f666"}`,
+            borderRadius:12, width:tipW,
+            boxShadow:"0 8px 40px rgba(0,0,0,0.9)",
+            pointerEvents: isPinned ? "auto" : "none",
+            maxHeight: maxH, display:"flex", flexDirection:"column",
+            userSelect: isPinned ? "text" : "none",
+          }}>
+          {/* 헤더 */}
+          <div style={{
+            display:"flex", justifyContent:"space-between", alignItems:"center",
+            padding:"8px 12px", borderBottom:"1px solid #1e3a5f",
+            fontSize:10, color: isPinned?"#f59e0b":"#4a6fa5", flexShrink:0,
+          }}>
+            <span>{isPinned ? "📌 고정됨 — 텍스트 선택 가능" : "🖱 클릭하면 고정됩니다"}</span>
+            {isPinned && (
+              <div style={{display:"flex", gap:6}}>
+                <button onClick={copyAll}
+                  style={{padding:"2px 8px",borderRadius:5,border:"1px solid #3b82f6",background:"#1d4ed8",color:"#fff",cursor:"pointer",fontSize:9,fontWeight:700}}>
+                  📋 전체 복사
+                </button>
+                <button onClick={e=>{e.stopPropagation();setPinned(null);}}
+                  style={{padding:"2px 8px",borderRadius:5,border:"1px solid #ef444466",background:"transparent",color:"#ef4444",cursor:"pointer",fontSize:9}}>
+                  ✕ 닫기
+                </button>
+              </div>
+            )}
+          </div>
+          {/* 내용 */}
+          <div style={{overflowY:"auto", padding:"6px 12px 10px"}}>
+            {lines.map((line,i)=>(
+              <div key={i} style={{
+                fontSize:10,
+                borderBottom: i<lines.length-1?"1px solid #1e3a5f22":"none",
+                padding:"4px 0",
+                display:"flex", justifyContent:"space-between", gap:12,
+              }}>
+                <span style={{color:"#4a6fa5",flexShrink:0,fontFamily:line.mono?"monospace":"inherit"}}>{line.label}</span>
+                <span style={{color:line.color||"#c8d8f0",wordBreak:"break-all",textAlign:"right",fontFamily:line.mono?"monospace":"inherit"}}>{line.value}</span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </span>
