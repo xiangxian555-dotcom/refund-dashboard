@@ -937,6 +937,52 @@ function Dashboard({ country, parsedData, onBack }) {
               ))}
             </div>
           </div>
+
+          {/* ── 월별 환불 상세 테이블 ── */}
+          <div style={{background:"#0d1b2e",borderRadius:14,padding:18,border:"1px solid #1e3a5f",marginBottom:12}}>
+            <div style={{fontSize:13,color:"#4a6fa5",fontWeight:600,marginBottom:12}}>📅 월별 환불 상세 ({country} · Google Play)</div>
+            <div style={{overflowX:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                <thead>
+                  <tr style={{background:"#060d18",borderBottom:"1px solid #1e3a5f"}}>
+                    {[{l:"연도",c:"#2d4a6e"},{l:"월",c:"#2d4a6e"},{l:"주문건수",c:"#3b82f6"},{l:"환불금액",c:"#f59e0b"}].map(({l,c})=>(
+                      <th key={l} style={{padding:"9px 12px",textAlign:"center",color:c,fontWeight:600,whiteSpace:"nowrap"}}>{l}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {yearlyChart.flatMap(row=>{
+                    const months = monthlyStats[row.year]||[];
+                    const rows = months.map((m,mi)=>(
+                      <tr key={`${row.year}-${mi}`} style={{borderBottom:"1px solid #0a1220"}}
+                        onMouseEnter={e=>e.currentTarget.style.background="#0a1528"}
+                        onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                        <td style={{padding:"7px 12px",color:"#4a6fa5",textAlign:"center"}}>{row.year}년</td>
+                        <td style={{padding:"7px 12px",color:"#c8d8f0",textAlign:"center",fontWeight:600}}>{m.month}</td>
+                        <td style={{padding:"7px 12px",color:"#3b82f6",textAlign:"center",fontWeight:700}}>{fmt(m.orders)}</td>
+                        <td style={{padding:"7px 12px",color:"#f59e0b",textAlign:"center",fontWeight:700}}>{currencySymbol}{fmt(Math.round(m.amount))}</td>
+                      </tr>
+                    ));
+                    const sub = months.reduce((s,m)=>({orders:s.orders+m.orders,amount:s.amount+m.amount}),{orders:0,amount:0});
+                    rows.push(
+                      <tr key={`sub-${row.year}`} style={{background:"#0a1e3a",borderBottom:"2px solid #1e3a5f",fontWeight:700}}>
+                        <td style={{padding:"7px 12px",color:"#e8f4ff",textAlign:"center"}}>{row.year}년 소계</td>
+                        <td style={{padding:"7px 12px",color:"#2d4a6e",textAlign:"center"}}>—</td>
+                        <td style={{padding:"7px 12px",color:"#3b82f6",textAlign:"center"}}>{fmt(sub.orders)}</td>
+                        <td style={{padding:"7px 12px",color:"#f59e0b",textAlign:"center"}}>{currencySymbol}{fmt(Math.round(sub.amount))}</td>
+                      </tr>
+                    );
+                    return rows;
+                  })}
+                  <tr style={{background:"#0a1528",borderTop:"2px solid #3b82f644",fontWeight:800}}>
+                    <td colSpan={2} style={{padding:"9px 12px",color:"#e8f4ff",textAlign:"center"}}>합계</td>
+                    <td style={{padding:"9px 12px",color:"#3b82f6",textAlign:"center"}}>{fmt(stats.totalOrders)}</td>
+                    <td style={{padding:"9px 12px",color:"#f59e0b",textAlign:"center"}}>{currencySymbol}{fmt(Math.round(stats.amountTotal))}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
         </>)}
       </>)}
 
@@ -996,7 +1042,7 @@ function Dashboard({ country, parsedData, onBack }) {
               }} style={{padding:"8px 16px",borderRadius:8,border:"none",background:"#16a34a",color:"#fff",cursor:"pointer",fontWeight:700,fontSize:12}}>📥 엑셀 다운로드</button>
             </div>
             <div style={{overflowX:"auto"}}>
-              <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
                 <thead>
                   <tr style={{background:"#060d18",borderBottom:"1px solid #1e3a5f"}}>
                     {[{label:"연도",color:"#2d4a6e"},{label:"주문건수",color:"#3b82f6"},{label:"제재건수",color:"#ef4444"},{label:"복구수",color:"#22c55e"},{label:"복구율",color:"#22c55e"},{label:"복구금액",color:"#a78bfa"},{label:"재제재수",color:"#f59e0b"},{label:"재제재율",color:"#f59e0b"}].map(({label,color})=>(
@@ -1044,8 +1090,8 @@ function Dashboard({ country, parsedData, onBack }) {
                       <tr key={`det-${i}`} style={{background:"#060d18"}}>
                         <td colSpan={8} style={{padding:0}}>
                           <div style={{padding:"10px 20px",borderBottom:"1px solid #1e3a5f"}}>
-                            <div style={{fontSize:11,color:countryColor,fontWeight:700,marginBottom:8}}>📅 {row.year}년 월별 상세</div>
-                            <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}>
+                            <div style={{fontSize:13,color:countryColor,fontWeight:700,marginBottom:8}}>📅 {row.year}년 월별 상세</div>
+                            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                               <thead>
                                 <tr style={{borderBottom:"1px solid #1e3a5f22"}}>
                                   {[{l:"월",c:"#2d4a6e"},{l:"주문건수",c:"#3b82f6"},{l:"제재건수",c:"#ef4444"},{l:"복구수",c:"#22c55e"},{l:"복구율",c:"#22c55e"},{l:"복구금액",c:"#a78bfa"},{l:"재제재수",c:"#f59e0b"},{l:"재제재율",c:"#f59e0b"}].map(({l,c})=>(
@@ -1213,6 +1259,73 @@ function Dashboard({ country, parsedData, onBack }) {
                   <span style={{marginLeft:"auto",fontWeight:700,color:c}}>{fmt(v)}명</span>
                 </div>
               ))}
+            </div>
+          </div>
+
+          {/* ── CS 월별 상세 테이블 ── */}
+          <div style={{background:"#0d1b2e",borderRadius:14,padding:18,border:"1px solid #1e3a5f",marginTop:12}}>
+            <div style={{fontSize:13,color:"#4a6fa5",fontWeight:600,marginBottom:12}}>📅 월별 CS대응 상세 ({country})</div>
+            <div style={{overflowX:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                <thead>
+                  <tr style={{background:"#060d18",borderBottom:"1px solid #1e3a5f"}}>
+                    {[{l:"연도",c:"#2d4a6e"},{l:"월",c:"#2d4a6e"},{l:"복구완료",c:"#22c55e"},{l:"재제재",c:"#ef4444"},{l:"복구율",c:"#22c55e"}].map(({l,c})=>(
+                      <th key={l} style={{padding:"9px 12px",textAlign:"center",color:c,fontWeight:600,whiteSpace:"nowrap"}}>{l}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(()=>{
+                    // respTrend를 연도-월별로 그룹화
+                    const byYear = {};
+                    filteredResp.forEach(d=>{
+                      const yr = d.year||(d.month?.slice(0,4)); if(!yr) return;
+                      const mo = d.month||"";
+                      if(!byYear[yr]) byYear[yr]={};
+                      if(!byYear[yr][mo]) byYear[yr][mo]={복구완료:0,재제재:0};
+                      if(d.status==="복구완료") byYear[yr][mo].복구완료++;
+                      else if(d.status==="재제재") byYear[yr][mo].재제재++;
+                    });
+                    const allRows2 = [];
+                    Object.keys(byYear).sort().forEach(yr=>{
+                      const months2 = Object.keys(byYear[yr]).sort();
+                      months2.forEach(mo=>{
+                        const m=byYear[yr][mo];
+                        const tot=m.복구완료+m.재제재;
+                        allRows2.push(
+                          <tr key={`${yr}-${mo}`} style={{borderBottom:"1px solid #0a1220"}}
+                            onMouseEnter={e=>e.currentTarget.style.background="#0a1528"}
+                            onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                            <td style={{padding:"7px 12px",color:"#4a6fa5",textAlign:"center"}}>{yr}년</td>
+                            <td style={{padding:"7px 12px",color:"#c8d8f0",textAlign:"center",fontWeight:600}}>{mo}</td>
+                            <td style={{padding:"7px 12px",color:"#22c55e",textAlign:"center",fontWeight:700}}>{fmt(m.복구완료)}</td>
+                            <td style={{padding:"7px 12px",color:"#ef4444",textAlign:"center",fontWeight:700}}>{fmt(m.재제재)}</td>
+                            <td style={{padding:"7px 12px",color:"#22c55e",textAlign:"center"}}>{tot?Math.round(m.복구완료/tot*100):0}%</td>
+                          </tr>
+                        );
+                      });
+                      const sub = months2.reduce((s,mo)=>({복구완료:s.복구완료+byYear[yr][mo].복구완료,재제재:s.재제재+byYear[yr][mo].재제재}),{복구완료:0,재제재:0});
+                      const subTot=sub.복구완료+sub.재제재;
+                      allRows2.push(
+                        <tr key={`sub-${yr}`} style={{background:"#0a1e3a",borderBottom:"2px solid #1e3a5f",fontWeight:700}}>
+                          <td style={{padding:"7px 12px",color:"#e8f4ff",textAlign:"center"}}>{yr}년 소계</td>
+                          <td style={{padding:"7px 12px",color:"#2d4a6e",textAlign:"center"}}>—</td>
+                          <td style={{padding:"7px 12px",color:"#22c55e",textAlign:"center"}}>{fmt(sub.복구완료)}</td>
+                          <td style={{padding:"7px 12px",color:"#ef4444",textAlign:"center"}}>{fmt(sub.재제재)}</td>
+                          <td style={{padding:"7px 12px",color:"#22c55e",textAlign:"center"}}>{subTot?Math.round(sub.복구완료/subTot*100):0}%</td>
+                        </tr>
+                      );
+                    });
+                    return allRows2;
+                  })()}
+                  <tr style={{background:"#0a1528",borderTop:"2px solid #22c55e44",fontWeight:800}}>
+                    <td colSpan={2} style={{padding:"9px 12px",color:"#e8f4ff",textAlign:"center"}}>합계</td>
+                    <td style={{padding:"9px 12px",color:"#22c55e",textAlign:"center"}}>{fmt(stats.respRecovered)}</td>
+                    <td style={{padding:"9px 12px",color:"#ef4444",textAlign:"center"}}>{fmt(stats.respResanctioned)}</td>
+                    <td style={{padding:"9px 12px",color:"#22c55e",textAlign:"center"}}>{(stats.respRecovered+stats.respResanctioned)?Math.round(stats.respRecovered/(stats.respRecovered+stats.respResanctioned)*100):0}%</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </>)}
