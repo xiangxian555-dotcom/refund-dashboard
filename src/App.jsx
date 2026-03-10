@@ -813,6 +813,15 @@ function Dashboard({ country, parsedData, onBack }) {
       {/* ━━━ 연도별 분석 ━━━ */}
       {tab==="연도별 분석"&&(<>
         <FilterBar/>
+        {/* 구글 시트 미로드시 안내 */}
+        {!hasResp&&hasData&&(
+          <div style={{background:"#0d1b2e",borderRadius:12,padding:"10px 16px",marginBottom:12,border:"1px solid #f59e0b44",display:"flex",alignItems:"center",gap:12}}>
+            <span style={{fontSize:12,color:"#f59e0b"}}>⚠️ 복구금액을 보려면 CS대응현황 데이터를 먼저 불러오세요</span>
+            <button onClick={fetchSheets} style={{padding:"5px 14px",borderRadius:7,border:"none",background:"#1d4ed8",color:"#fff",cursor:"pointer",fontWeight:700,fontSize:11}}>
+              📡 불러오기
+            </button>
+          </div>
+        )}
         {!hasData?<div style={{background:"#0d1b2e",borderRadius:14,padding:40,textAlign:"center",color:"#2d4a6e",fontSize:13}}>데이터가 없습니다.</div>:(<>
           <div style={{background:"#0d1b2e",borderRadius:14,padding:18,border:"1px solid #1e3a5f",marginBottom:12}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
