@@ -223,10 +223,9 @@ export default async function handler(req, res) {
             const yText = String(row[yColIdx] || "").trim();
             const status = classifyJapan(yText);
 
-            // Y열 코멘트에서 마지막 날짜 추출 (없으면 抽出期間 열 폴백)
-            const dateFromComment = extractJapanDate(yText);
-            const dateRaw = String(row[ci.date] || "").trim();
-            const date = dateFromComment || parseDate(dateRaw) || "";
+            // Y열 코멘트에서 날짜 추출 — 없으면 행 스킵 (抽出期間 열은 형식이 달라 사용 안 함)
+            const date = extractJapanDate(yText);
+            if (!date) continue; // 날짜 없는 행은 집계에서 제외
 
             allRows.push({
               openid,
