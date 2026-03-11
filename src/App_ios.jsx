@@ -1428,7 +1428,7 @@ export default function App() {
     <>
       {toast&&<div style={{position:"fixed",bottom:32,left:"50%",transform:"translateX(-50%)",zIndex:9999,background:toast.color,color:"#fff",padding:"14px 28px",borderRadius:14,fontWeight:700,fontSize:13,boxShadow:"0 4px 24px rgba(0,0,0,0.6)",whiteSpace:"nowrap",maxWidth:"90vw",overflow:"hidden",textOverflow:"ellipsis"}}>{toast.msg}</div>}
       {screen==="landing"&&<LandingPage onEnter={setScreen} parsedData={parsedData} uploadLog={uploadLog} onFile={handleFile} fileNames={fileNames}/>}
-      {(screen==="한국"||screen==="일본")&&parsedData&&<Dashboard country={screen} parsedData={parsedData} onBack={()=>setScreen("landing")}/>}
+      {(screen==="한국"||screen==="일본"||screen==="ETC")&&parsedData&&<Dashboard country={screen} parsedData={parsedData} onBack={()=>setScreen("landing")}/>}
     </>
   );
 }
