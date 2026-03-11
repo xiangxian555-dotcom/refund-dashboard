@@ -8,7 +8,7 @@ import * as XLSX from "xlsx";
 const fmt = n => (n || 0).toLocaleString();
 const TT = { contentStyle: { background: "#060d18", border: "1px solid #1e3a5f", borderRadius: 8, fontSize: 11 } };
 const SHEET_ID = "1xySVvqx0DXiox8fkvMAr86WzP1hTdHzJuxf63iop6l8";
-const TABS = ["마켓 환불 현황", "연도별 분석", "CS대응현황", "유저 조회", "AI 분석"];
+const TABS = ["마켓 환불 현황", "연도별 분석", "CS대응현황", "유저 조회"];
 
 // Google Play 전용 — 국가별 GID
 const GSHEET_TARGETS = {
@@ -530,10 +530,6 @@ function Dashboard({ country, parsedData, onBack }) {
   const [sheetErr, setSheetErr] = useState("");
   const [sheetStatus, setSheetStatus] = useState(null);
   const [lastFetch, setLastFetch] = useState("");
-  const [chatMessages, setChatMessages] = useState([{ role:"assistant", content:`안녕하세요! ${country} Google Play 결제취소 악용자 대응현황을 분석해드립니다 😊\n\n예시 질문:\n• 2025년 주문건수 몇 건이에요?\n• 제재된 사람 몇 명이에요?\n• 복구 완료율이 어떻게 돼요?` }]);
-  const [chatInput, setChatInput] = useState("");
-  const [chatLoading, setChatLoading] = useState(false);
-  const chatEndRef = useRef(null);
   const [searchQ, setSearchQ] = useState("");
   const [searchRes, setSearchRes] = useState(null);
   const [toast, setToast] = useState(null);
@@ -771,19 +767,6 @@ function Dashboard({ country, parsedData, onBack }) {
     return Object.values(g).sort((a,b)=>a.month.localeCompare(b.month));
   }, [filteredResp]);
 
-  const sendChat = useCallback(async () => {
-    const msg=chatInput.trim(); if(!msg||chatLoading) return;
-    setChatInput(""); setChatMessages(prev=>[...prev,{role:"user",content:msg}]); setChatLoading(true);
-    const ctx = { 국가:country, 플랫폼:"Google Play", 전체주문건수:allOrderRows.length, 유니크유저:stats.uniqueUsers, 환불금액:stats.amountTotal, 악용자:{유니크OpenID:stats.totalAbuseUnique,회수:stats.recovered,제재:stats.sanctioned}, 대응현황:{복구완료:stats.respRecovered,재제재:stats.respResanctioned}, 연도별:Object.fromEntries(yearlyChart.map(d=>[d.year+"년",d.주문건수])) };
-    try {
-      const res = await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,system:`당신은 PUBG Mobile 결제취소 악용자 대응 데이터 분석 어시스턴트입니다.\n현재 대시보드: ${country} Google Play 전용\n데이터: ${JSON.stringify(ctx,null,2)}\n한국어로 간결하게 답변해주세요.`,messages:[...chatMessages.slice(1),{role:"user",content:msg}]})});
-      const data=await res.json();
-      setChatMessages(prev=>[...prev,{role:"assistant",content:data.content?.[0]?.text||"응답 오류"}]);
-    } catch(e) { setChatMessages(prev=>[...prev,{role:"assistant",content:"오류: "+e.message}]); }
-    setChatLoading(false);
-  }, [chatInput,chatLoading,chatMessages,country,allOrderRows,stats,yearlyChart]);
-
-  useEffect(()=>{ chatEndRef.current?.scrollIntoView({behavior:"smooth"}); },[chatMessages]);
 
   const doSearch = useCallback(() => {
     const q=searchQ.trim(); if(!q) return;
@@ -1269,7 +1252,7 @@ function Dashboard({ country, parsedData, onBack }) {
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
                 <thead>
                   <tr style={{background:"#060d18",borderBottom:"1px solid #1e3a5f"}}>
-                    {[{l:"연도",c:"#2d4a6e"},{l:"월",c:"#2d4a6e"},{l:"복구완료",c:"#22c55e"},{l:"재제재",c:"#ef4444"},{l:"복구율",c:"#22c55e"}].map(({l,c})=>(
+                    {[{l:"연도",c:"#2d4a6e"},{l:"월",c:"#2d4a6e"},{l:"복구완료",c:"#22c55e"},{l:"재제재",c:"#ef4444"}].map(({l,c})=>(
                       <th key={l} style={{padding:"9px 12px",textAlign:"center",color:c,fontWeight:600,whiteSpace:"nowrap"}}>{l}</th>
                     ))}
                   </tr>
@@ -1300,7 +1283,6 @@ function Dashboard({ country, parsedData, onBack }) {
                             <td style={{padding:"7px 12px",color:"#c8d8f0",textAlign:"center",fontWeight:600}}>{mo}</td>
                             <td style={{padding:"7px 12px",color:"#22c55e",textAlign:"center",fontWeight:700}}>{fmt(m.복구완료)}</td>
                             <td style={{padding:"7px 12px",color:"#ef4444",textAlign:"center",fontWeight:700}}>{fmt(m.재제재)}</td>
-                            <td style={{padding:"7px 12px",color:"#22c55e",textAlign:"center"}}>{tot?Math.round(m.복구완료/tot*100):0}%</td>
                           </tr>
                         );
                       });
@@ -1312,7 +1294,6 @@ function Dashboard({ country, parsedData, onBack }) {
                           <td style={{padding:"7px 12px",color:"#2d4a6e",textAlign:"center"}}>—</td>
                           <td style={{padding:"7px 12px",color:"#22c55e",textAlign:"center"}}>{fmt(sub.복구완료)}</td>
                           <td style={{padding:"7px 12px",color:"#ef4444",textAlign:"center"}}>{fmt(sub.재제재)}</td>
-                          <td style={{padding:"7px 12px",color:"#22c55e",textAlign:"center"}}>{subTot?Math.round(sub.복구완료/subTot*100):0}%</td>
                         </tr>
                       );
                     });
@@ -1322,7 +1303,6 @@ function Dashboard({ country, parsedData, onBack }) {
                     <td colSpan={2} style={{padding:"9px 12px",color:"#e8f4ff",textAlign:"center"}}>합계</td>
                     <td style={{padding:"9px 12px",color:"#22c55e",textAlign:"center"}}>{fmt(stats.respRecovered)}</td>
                     <td style={{padding:"9px 12px",color:"#ef4444",textAlign:"center"}}>{fmt(stats.respResanctioned)}</td>
-                    <td style={{padding:"9px 12px",color:"#22c55e",textAlign:"center"}}>{(stats.respRecovered+stats.respResanctioned)?Math.round(stats.respRecovered/(stats.respRecovered+stats.respResanctioned)*100):0}%</td>
                   </tr>
                 </tbody>
               </table>
@@ -1400,34 +1380,6 @@ function Dashboard({ country, parsedData, onBack }) {
               )}
             </div>
           )}
-        </div>
-      )}
-
-      {/* ━━━ AI 분석 ━━━ */}
-      {tab==="AI 분석"&&(
-        <div style={{display:"flex",flexDirection:"column",height:"calc(100vh - 260px)",minHeight:400}}>
-          <div style={{background:"#0d1b2e",borderRadius:12,padding:12,marginBottom:12,borderLeft:`4px solid ${countryColor}`}}>
-            <div style={{fontSize:12,color:countryColor,fontWeight:700}}>🤖 AI 데이터 분석 — {country} Google Play 전용</div>
-            <div style={{fontSize:11,color:"#2d4a6e",marginTop:2}}>{country} 데이터 기반으로 자유롭게 질문하세요</div>
-          </div>
-          <div style={{flex:1,background:"#0d1b2e",borderRadius:14,padding:16,border:"1px solid #1e3a5f",overflowY:"auto",marginBottom:12}}>
-            {chatMessages.map((m,i)=>(
-              <div key={i} style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start",marginBottom:12}}>
-                <div style={{maxWidth:"80%",padding:"10px 14px",borderRadius:12,background:m.role==="user"?countryColor:"#0a1628",color:"#fff",fontSize:13,lineHeight:1.6,whiteSpace:"pre-wrap",border:m.role==="assistant"?"1px solid #1e3a5f":"none"}}>
-                  {m.content}
-                </div>
-              </div>
-            ))}
-            {chatLoading&&<div style={{display:"flex",justifyContent:"flex-start",marginBottom:12}}><div style={{padding:"10px 14px",borderRadius:12,background:"#0a1628",border:"1px solid #1e3a5f",color:countryColor,fontSize:13}}>⏳ 분석 중...</div></div>}
-            <div ref={chatEndRef}/>
-          </div>
-          <div style={{display:"flex",gap:8}}>
-            <input value={chatInput} onChange={e=>setChatInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&sendChat()}
-              placeholder={`${country} Google Play 데이터 질문...`}
-              style={{flex:1,padding:"12px 16px",borderRadius:12,border:"1px solid #1e3a5f",background:"#0d1b2e",color:"#c8d8f0",fontSize:13,outline:"none"}}/>
-            <button onClick={sendChat} disabled={chatLoading}
-              style={{padding:"12px 20px",borderRadius:12,border:"none",background:chatLoading?"#1e3a5f":countryColor,color:"#fff",cursor:chatLoading?"wait":"pointer",fontWeight:700,fontSize:13}}>전송</button>
-          </div>
         </div>
       )}
 
