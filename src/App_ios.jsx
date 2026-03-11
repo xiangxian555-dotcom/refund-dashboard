@@ -14,9 +14,11 @@ const TABS = ["마켓 환불 현황", "연도별 분석", "CS대응현황", "유
 const GSHEET_TARGETS = {
   한국: { label: "한국 iOS", gid: "0" },
   일본: { label: "일본 iOS", gid: "1297360578" },
+  ETC: { label: "ETC iOS", gid: "" },
 };
 
 const CURRENCY_COUNTRY = { KRW: "한국", JPY: "일본" };
+const ETC_COUNTRY = "ETC"; // iOS 전용 — KRW/JPY 외 통화 유저
 const STATUS_COLORS = { "복구완료": "#22c55e", "재제재": "#ef4444" };
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -41,7 +43,8 @@ function parseNum(v) {
 }
 
 function getCountry(currency) {
-  return CURRENCY_COUNTRY[String(currency||"").trim().toUpperCase()] || "기타";
+  const c = String(currency||"").trim().toUpperCase();
+  return CURRENCY_COUNTRY[c] || c || "기타"; // iOS: 기타 통화는 통화코드로 표시
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -110,8 +113,7 @@ function parseExcelFile(wb) {
         if (!openid && !orderNo) continue;
         const currency = String(row[ci.currency] ?? "KRW").trim().toUpperCase() || "KRW";
         // iOS는 KRW=한국, JPY=일본, 나머지는 통화 그대로 보존 (글로벌 유저 포함)
-        const country = getCountry(currency) !== "기타" ? getCountry(currency) : (currency === "KRW" ? "한국" : currency === "JPY" ? "일본" : "기타");
-        if (country === "기타") continue; // 한국/일본 외 제외
+        const country = getCountry(currency); // iOS: ETC 유저 포함
         const dateRaw = ci.time >= 0 ? row[ci.time] : "";
         const date = parseDate(String(dateRaw||"")) || "";
         const amount = Math.abs(parseNum(ci.amount >= 0 ? row[ci.amount] : 0));
@@ -186,7 +188,7 @@ function parseExcelFile(wb) {
         abuseOidSet.add(openid);
         const currency = String(row[ci.currency] ?? "KRW").trim().toUpperCase() || "KRW";
         const country = getCountry(currency);
-        if (country === "기타") continue; // KRW/JPY 아닌 경우 제외
+        // iOS: ETC 유저도 포함
         const resultText = String(row[ci.result] ?? "").trim();
         const hasJesae = /제재/.test(resultText);
         const hasHoesu = /회수/.test(resultText);
@@ -494,6 +496,7 @@ function LandingPage({ onEnter, parsedData, uploadLog, onFile, fileNames }) {
         {[
           { key:"한국", flag:"🇰🇷", title:"한국 대시보드", desc:"Apple iOS · KRW 기준", color:"#0ea5e9", bgFrom:"#0a1e3a" },
           { key:"일본", flag:"🇯🇵", title:"日本ダッシュボード", desc:"Apple iOS · JPY 기준", color:"#f97316", bgFrom:"#1a100a" },
+          { key:"ETC", flag:"🌏", title:"ETC 대시보드", desc:"Apple iOS · 기타 통화", color:"#8b5cf6", bgFrom:"#1a0a2e" },
         ].map(card => (
           <div key={card.key}
             onClick={() => hasData && onEnter(card.key)}
@@ -546,18 +549,18 @@ function Dashboard({ country, parsedData, onBack }) {
     return s.replace(/\.0+$/, "");
   };
 
-  const countryColor = country==="한국"?"#0ea5e9":"#f97316";
-  const countryFlag = country==="한국"?"🇰🇷":"🇯🇵";
-  const currencySymbol = country==="한국"?"₩":"¥";
-  const currencyCode = country==="한국"?"KRW":"JPY";
+  const countryColor = country==="한국"?"#0ea5e9":country==="일본"?"#f97316":"#8b5cf6";
+  const countryFlag = country==="한국"?"🇰🇷":country==="일본"?"🇯🇵":"🌏";
+  const currencySymbol = country==="한국"?"₩":country==="일본"?"¥":"";
+  const currencyCode = country==="한국"?"KRW":country==="일본"?"JPY":"ETC";
 
   // 국가 + Google 필터
   const allOrderRows = useMemo(() =>
-    parsedData.orderRows.filter(d => d.country===country && d.platform==="Apple"),
+    parsedData.orderRows.filter(d => d.platform==="Apple" && (country==="ETC" ? (d.country!=="한국"&&d.country!=="일본") : d.country===country)),
   [parsedData, country]);
 
   const allAbuseRows = useMemo(() =>
-    parsedData.abuseRows.filter(d => d.country===country),
+    parsedData.abuseRows.filter(d => country==="ETC" ? (d.country!=="한국"&&d.country!=="일본") : d.country===country),
   [parsedData, country]);
 
   const allAbuseMap = useMemo(() => {
