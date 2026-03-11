@@ -7,6 +7,8 @@ const SHEET_TABS = [
   { name: "일본_결제취소 악용 정상화(iOS)", country: "일본", platform: "Apple" },
 ];
 
+// countryFilter가 "ETC"이면 한국/일본 외 시트 없으므로 빈 배열 반환
+
 function parseDate(val) {
   if (!val) return "";
   const s = String(val).trim();
