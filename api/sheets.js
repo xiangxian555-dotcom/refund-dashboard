@@ -25,20 +25,25 @@ function getLastLine(text) {
 
 // ━━━ 한국 시트 분류 ━━━
 // N열 or O열의 마지막 코멘트 기준
-// "회수" 포함 → 복구완료
-// "정지" or "제재" 포함 → 재제재
+// ★ 수정: 제재/정지를 먼저 체크 → "uc회수 부족 제재" 같은 문구 오분류 방지
 function classifyKorea(nText, oText) {
   // O열 우선, 없으면 N열
   const text = (oText && oText.trim() && oText.trim() !== "-") ? oText : nText;
   if (!text || !text.trim() || text.trim() === "-") return null; // 미처리 → null
+
   const lastLine = getLastLine(text);
   const checkText = lastLine || text;
 
+  // ★ 제재/정지 계열을 먼저 체크 (회수보다 우선)
+  if (/정지|제재|재정지|재제재/.test(checkText)) return "재제재";
+  if (/회수완료|회수 완료|UC회수|uc회수|복구|해제|정상화|재충전/.test(checkText)) return "복구완료";
+  // 단순 "회수" 단어도 복구완료 (제재 없는 경우)
   if (/회수/.test(checkText)) return "복구완료";
-  if (/정지|제재/.test(checkText)) return "재제재";
-  // 전체 텍스트도 확인
+
+  // 마지막 줄에서 판단 안 되면 전체 텍스트도 확인
+  if (/정지|제재|재정지|재제재/.test(text)) return "재제재";
   if (/회수/.test(text)) return "복구완료";
-  if (/정지|제재/.test(text)) return "재제재";
+
   return null;
 }
 
@@ -55,8 +60,8 @@ function classifyJapan(yText) {
   const lastLine = lines[lines.length - 1] || "";
 
   // ★ 마지막 줄만 기준으로 판단
-  if (/回収/.test(lastLine)) return "복구완료";
   if (/BAN|停止|再制裁/.test(lastLine)) return "재제재";
+  if (/回収/.test(lastLine)) return "복구완료";
 
   return null;
 }
@@ -107,7 +112,6 @@ export default async function handler(req, res) {
           }
           const headers = rows[headerIdx];
 
-          // C열(openid), B열(date), N열(처리날짜/코멘트), O열(처리결과)
           const findCol = (...names) => {
             for (const n of names) {
               const idx = headers.findIndex(h => new RegExp(n, "i").test(h || ""));
@@ -118,14 +122,13 @@ export default async function handler(req, res) {
 
           const ci = {
             openid: findCol("openid", "open id", "오픈") >= 0
-              ? findCol("openid", "open id", "오픈") : 2, // C열 기본값
+              ? findCol("openid", "open id", "오픈") : 2,
             date: findCol("date", "날짜", "기간", "일시") >= 0
-              ? findCol("date", "날짜", "기간", "일시") : 1, // B열 기본값
+              ? findCol("date", "날짜", "기간", "일시") : 1,
             nCol: 13, // N열 (0-based index 13)
             oCol: 14, // O열 (0-based index 14)
           };
 
-          // 전체 행 저장 (중복 제거 없음 — 히스토리 전체 보존)
           for (let i = headerIdx + 1; i < rows.length; i++) {
             const row = rows[i];
             const openid = String(row[ci.openid] || "").trim();
@@ -135,7 +138,6 @@ export default async function handler(req, res) {
             const oText = String(row[ci.oCol] || "").trim();
             const status = classifyKorea(nText, oText);
 
-            // 처리 결과 없는 행도 저장 (히스토리 조회용) — null이면 "처리중"
             const dateRaw = String(row[ci.date] || "").trim();
             const date = parseDate(dateRaw);
 
@@ -154,11 +156,8 @@ export default async function handler(req, res) {
         }
 
         // ━━━ 일본 시트 파싱 ━━━
-        // 구조: 1~2행 타이틀, 3행 대분류, 4행 실제헤더, 5행~ 데이터
-        // E열(4) = OPEN ID, B열(1) = 抽出期間, Y열(24) = コメント
         else {
-          // 헤더 행 찾기 — "OPEN ID" 텍스트가 있는 행
-          let headerIdx = 3; // 기본값: 4행(0-based: 3)
+          let headerIdx = 3;
           for (let i = 0; i < Math.min(10, rows.length); i++) {
             if (rows[i].some(c => /^open.?id$/i.test((c || "").trim()))) {
               headerIdx = i; break;
@@ -174,19 +173,14 @@ export default async function handler(req, res) {
             return -1;
           };
 
-          // E열(index 4) = OPEN ID, B열(index 1) = 抽出期間
           const openidIdx = findCol("OPEN ID", "openid") >= 0 ? findCol("OPEN ID", "openid") : 4;
           const dateIdx = findCol("抽出期間", "期間") >= 0 ? findCol("抽出期間", "期間") : 1;
-
           const ci = { openid: openidIdx, date: dateIdx };
 
-          // コメント 열 찾기 — 헤더에서 동적으로 찾고, 없으면 마지막 열 사용
-          let yColIdx = headers.length - 1; // 기본값: 마지막 열
-          // 마지막 비어있지 않은 열 찾기
+          let yColIdx = headers.length - 1;
           for (let c = headers.length - 1; c >= 0; c--) {
             if (headers[c] && headers[c].trim()) { yColIdx = c; break; }
           }
-          // コメント 헤더 있으면 그걸 우선 사용
           for (let c = 0; c < headers.length; c++) {
             if (/コメント|comment/i.test((headers[c] || "").trim())) {
               yColIdx = c; break;
@@ -194,15 +188,12 @@ export default async function handler(req, res) {
           }
           console.log("[일본시트] 헤더수:", headers.length, "코멘트열:", yColIdx, "헤더:", headers[yColIdx]);
 
-          // 전체 행 저장 (중복 제거 없음 — 히스토리 전체 보존)
           for (let i = headerIdx + 1; i < rows.length; i++) {
             const row = rows[i];
             const rawOid = row[ci.openid];
             if (!rawOid && rawOid !== 0) continue;
             const openid = String(rawOid).trim().replace(/\.0+$/, "");
             if (!openid) continue;
-            // 일본 OpenID는 숫자 정밀도 손실로 15~16자리로 잘릴 수 있음
-            // truncatedOid: 앞 15자리 (매칭용)
             const truncatedOid = openid.length >= 15 ? openid.slice(0, 15) : openid;
 
             const yText = String(row[yColIdx] || "").trim();
@@ -213,7 +204,7 @@ export default async function handler(req, res) {
 
             allRows.push({
               openid,
-              truncatedOid, // 앞 15자리 (엑셀 OpenID 매칭용)
+              truncatedOid,
               country: tab.country,
               platform: tab.platform,
               date,
