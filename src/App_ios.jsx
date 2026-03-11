@@ -632,8 +632,8 @@ function Dashboard({ country, parsedData, onBack }) {
   const stats = useMemo(() => {
     const totalOrders = filtered.filter(d=>d.type==="UC보유정보").length;
     const uniqueUsers = new Set(filtered.filter(d=>d.type==="UC보유정보").map(d=>d.openid).filter(Boolean)).size;
-    // 환불 금액: UC보유정보 시트 기준 (OrderID 시트로 금액 업데이트됨)
-    const amountTotal = filtered.reduce((s,d)=>s+Math.abs(d.amount||0),0);
+    // iOS 환불 금액: OrderID 시트 기준 (openid별 합산)
+    const amountTotal = filtered.filter(d=>d.type==="OrderID").reduce((s,d)=>s+Math.abs(d.amount||0),0);
 
     const abuseUniqueOids = [...new Set(allAbuseRows.map(a=>normalizeOid(a.openid)).filter(Boolean))];
     const totalAbuseUnique = abuseUniqueOids.length;
@@ -663,11 +663,12 @@ function Dashboard({ country, parsedData, onBack }) {
     return Object.values(g).sort((a,b)=>a.year.localeCompare(b.year));
   }, [allOrderRows]);
 
-  // OrderID 시트 rows를 orderNo 기준으로 빠르게 조회하기 위한 맵
+  // iOS: OrderID 시트를 openid 기준으로 금액 합산 맵 생성
   const orderIdAmountMap = useMemo(() => {
     const map = {};
-    allOrderRows.filter(d=>d.type==="OrderID"&&d.orderNo).forEach(d=>{
-      map[d.orderNo] = Math.abs(d.amount||0);
+    allOrderRows.filter(d=>d.type==="OrderID"&&d.openid).forEach(d=>{
+      const key = normalizeOid(d.openid);
+      map[key] = (map[key]||0) + Math.abs(d.amount||0);
     });
     return map;
   }, [allOrderRows]);
@@ -684,17 +685,13 @@ function Dashboard({ country, parsedData, onBack }) {
       const sv = svKey ? sheetOidMap[svKey] : null;
       if(sv?.status==="복구완료") {
         g[year].recovered++;
-        g[year].recoveredOids.push(a.openid); // 툴팁용 OpenID 저장
-        const ucRows = allOrderRows.filter(d=>normalizeOid(d.openid)===normOid&&d.type==="UC보유정보");
-        const amt = ucRows.reduce((s,d)=>{
-          const orderAmt = d.orderNo ? (orderIdAmountMap[d.orderNo]||0) : 0;
-          const finalAmt = orderAmt > 0 ? orderAmt : Math.abs(d.amount||0);
-          if(d.orderNo) g[year].recoveredOrders.push({ // 툴팁용 주문 저장
-            openid: a.openid, orderNo: d.orderNo, amount: finalAmt
-          });
-          return s + finalAmt;
-        }, 0);
+        g[year].recoveredOids.push(a.openid);
+        // iOS: OrderID 시트에서 OpenID 기준 금액 합산
+        const amt = orderIdAmountMap[normOid] || 0;
         g[year].recoveredAmount += amt;
+        if(amt>0) g[year].recoveredOrders.push({
+          openid: a.openid, orderNo: "-", amount: amt
+        });
       } else if(sv?.status==="재제재") g[year].resanctioned++;
     });
     return g;
@@ -733,14 +730,10 @@ function Dashboard({ country, parsedData, onBack }) {
       if(sv?.status==="복구완료") {
         g[yr][mo].recovered++;
         g[yr][mo].recoveredOids.push(a.openid);
-        // 복구된 OpenID의 UC보유정보 주문번호 → OrderID 시트 금액 합산 (없으면 UC amount 폴백)
-        const ucRows = allOrderRows.filter(d=>normalizeOid(d.openid)===normOid&&d.type==="UC보유정보");
-        g[yr][mo].recoveredAmount += ucRows.reduce((s,d)=>{
-          const orderAmt = d.orderNo ? (orderIdAmountMap[d.orderNo]||0) : 0;
-          const finalAmt = orderAmt > 0 ? orderAmt : Math.abs(d.amount||0);
-          if(d.orderNo) g[yr][mo].recoveredOrders.push({openid:a.openid, orderNo:d.orderNo, amount:finalAmt});
-          return s + finalAmt;
-        }, 0);
+        // iOS: OrderID 시트에서 OpenID 기준 금액 합산
+        const amt = orderIdAmountMap[normOid] || 0;
+        g[yr][mo].recoveredAmount += amt;
+        if(amt>0) g[yr][mo].recoveredOrders.push({openid:a.openid, orderNo:"-", amount:amt});
       } else if(sv?.status==="재제재") g[yr][mo].resanctioned++;
     });
     const result = {};
