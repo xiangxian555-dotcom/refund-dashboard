@@ -1366,7 +1366,7 @@ function Dashboard({ country, parsedData, onBack }) {
                             <span style={{padding:"2px 8px",borderRadius:4,fontSize:10,background:col+"22",color:col}}>{h.status}</span>
                             {isLast&&<span style={{fontSize:10,color:col,fontWeight:700}}>← 최신</span>}
                           </div>
-                          {h.resultText&&<div style={{fontSize:11,color:"#4a6fa5",whiteSpace:"pre-wrap",wordBreak:"break-all"}}>{h.resultText.slice(0,200)}{h.resultText.length>200?"...":""}</div>}
+                          {h.resultText&&<div style={{fontSize:11,color:"#4a6fa5",whiteSpace:"pre-wrap",wordBreak:"break-all"}}>{h.resultText.slice(0,600)}{h.resultText.length>600?"...":""}</div>}
                         </div>
                       </div>
                     );
