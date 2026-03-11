@@ -47,21 +47,45 @@ function classifyKorea(nText, oText) {
   return null;
 }
 
+// ━━━ 일본 시트 날짜 추출 ━━━
+// Y열 코멘트에서 가장 마지막 날짜를 처리일로 사용
+// 패턴: (2020/05/28), (20/05/28), (21/2/3), (25/07/16) 등
+function extractJapanDate(yText) {
+  if (!yText) return "";
+  // 모든 날짜 패턴 추출
+  const matches = [...yText.matchAll(/\((\d{2,4})[\/\-](\d{1,2})[\/\-](\d{1,2})\)/g)];
+  if (!matches.length) return "";
+  // 마지막 날짜 사용
+  const last = matches[matches.length - 1];
+  let year = last[1];
+  // 2자리 연도 → 4자리 변환 (20→2020, 25→2025)
+  if (year.length === 2) year = (parseInt(year) >= 18 ? "20" : "20") + year;
+  const month = last[2].padStart(2, "0");
+  const day = last[3].padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 // ━━━ 일본 시트 분류 ━━━
-// Y열 전체 텍스트 기준 (줄바꿈 처리 포함)
-// "回収" 포함 → 복구완료
-// "BAN" or "停止" 포함 → 재제재
+// Y열 전체 코멘트 기준으로 최종 처리 결과 판단
+// 재제재를 먼저 체크 (복구 후 재제재 케이스 대응)
 function classifyJapan(yText) {
   if (!yText || !yText.trim()) return null;
 
-  // 줄바꿈 정규화
   const normalized = yText.replace(/\r\n|\r|\n|\u000A|\u000D/g, "\n");
   const lines = normalized.split("\n").map(l => l.trim()).filter(Boolean);
   const lastLine = lines[lines.length - 1] || "";
 
-  // ★ 마지막 줄만 기준으로 판단
-  if (/BAN|停止|再制裁/.test(lastLine)) return "재제재";
-  if (/回収/.test(lastLine)) return "복구완료";
+  // ★ 마지막 줄 기준으로 판단 (재제재 먼저)
+  if (/BAN処理済み|再度BAN|期限が過ぎたためBAN|チャージがなかったため.*BAN|課金しないで停止|停止いたしました|再制裁/.test(lastLine)) return "재제재";
+  if (/回収完了|回収いたしました|UCを回収|回収済み|回収を行った|回収案内|UC回収/.test(lastLine)) return "복구완료";
+
+  // 마지막 줄에서 판단 안 되면 전체 텍스트에서 가장 마지막 결과 판단
+  // 아래에서 위로 읽으면서 첫 번째 결과를 최종으로
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i];
+    if (/BAN処理済み|再度BAN|期限が過ぎたためBAN|チャージがなかったため.*BAN|課金しないで停止|停止いたしました|再制裁/.test(l)) return "재제재";
+    if (/回収完了|回収いたしました|UCを回収|回収済み|回収を行った|回収案内|UC回収/.test(l)) return "복구완료";
+  }
 
   return null;
 }
@@ -199,8 +223,10 @@ export default async function handler(req, res) {
             const yText = String(row[yColIdx] || "").trim();
             const status = classifyJapan(yText);
 
+            // Y열 코멘트에서 마지막 날짜 추출 (없으면 抽出期間 열 폴백)
+            const dateFromComment = extractJapanDate(yText);
             const dateRaw = String(row[ci.date] || "").trim();
-            const date = parseDate(dateRaw);
+            const date = dateFromComment || parseDate(dateRaw) || "";
 
             allRows.push({
               openid,
