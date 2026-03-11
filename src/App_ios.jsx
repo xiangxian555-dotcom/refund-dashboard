@@ -39,7 +39,10 @@ function parseDate(val) {
 
 function parseNum(v) {
   if (!v && v !== 0) return 0;
-  return parseFloat(String(v).replace(/,/g,"").trim()) || 0;
+  // 텍스트 서식 숫자 처리 (앞뒤 공백, 콤마, 따옴표, 탭 제거)
+  const s = String(v).replace(/[,\s\t'"`]/g, "").trim();
+  if (!s) return 0;
+  return parseFloat(s) || 0;
 }
 
 function getCountry(currency) {
@@ -78,7 +81,7 @@ function parseExcelFile(wb) {
 
   wb.SheetNames.forEach(sName => {
     const ws = wb.Sheets[sName];
-    const raw = XLSX.utils.sheet_to_json(ws, { defval: "", header: 1 });
+    const raw = XLSX.utils.sheet_to_json(ws, { defval: "", header: 1, raw: false });
     console.log("[시트감지]", sName, "행수:", raw?.length);
     if (!raw || raw.length < 2) return;
 
@@ -140,25 +143,21 @@ function parseExcelFile(wb) {
       let parsed = 0;
       for (let i = headerIdx + 1; i < raw.length; i++) {
         const row = raw[i];
-        const orderNo = String(row[ci.orderNo] ?? "").trim();
-        if (!orderNo) continue; // Apple 주문번호 (-APP 등)
+        const openid = String(row[ci.openid] ?? "").trim();
+        if (!openid) continue;
         const amount = Math.abs(parseNum(ci.amount >= 0 ? row[ci.amount] : 0));
-        const existing = orderRows.find(o => o.orderNo === orderNo);
-        if (existing) {
-          if (amount > 0) existing.amount = amount;
-        } else {
-          const openid = String(row[ci.openid] ?? "").trim();
-          const currency = String(row[ci.currency] ?? "KRW").trim().toUpperCase() || "KRW";
-          const country = getCountry(currency);
-          const dateRaw = ci.time >= 0 ? row[ci.time] : "";
-          const date = parseDate(String(dateRaw||"")) || "";
-          orderRows.push({
-            orderNo, openid, currency, country, platform: "Apple",
-            date, year: date.slice(0,4), month: date.slice(0,7),
-            ucBalance: 0, amount, type: "OrderID", // 카운트 제외
-          });
-          parsed++;
-        }
+        if (!amount) continue; // 금액 0이면 스킵
+        const orderNo = String(row[ci.orderNo] ?? "").trim();
+        const currency = String(row[ci.currency] ?? "KRW").trim().toUpperCase() || "KRW";
+        const country = getCountry(currency);
+        const dateRaw = ci.time >= 0 ? row[ci.time] : "";
+        const date = parseDate(String(dateRaw||"")) || "";
+        orderRows.push({
+          orderNo, openid, currency, country, platform: "Apple",
+          date, year: date.slice(0,4), month: date.slice(0,7),
+          ucBalance: 0, amount, type: "OrderID",
+        });
+        parsed++;
       }
       log.push({ sheet: sName, type: "OrderID(Google)", count: parsed });
     }
