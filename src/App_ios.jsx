@@ -96,9 +96,9 @@ function parseExcelFile(wb) {
     if (isUCSheet) {
       const ci = {
         openid: fc("오픈 아이디","오픈아이디","openid","open id","open_id","오픈 id","오픈id","vopenid"),
-        orderNo: fc("주문번호","order number","order no","orderid"),
+        orderNo: fc("오더 번호","주문번호","order number","order no","orderid","externalorderid"),
         currency: (() => {
-          const idx = fc("화폐","currency","통화","h열","화폐종류");
+          const idx = fc("화폐","currencytype","currency","통화","화폐종류");
           return idx >= 0 ? idx : 7; // H열 기본값
         })(),
         ucBalance: fc("uc잔액","uc 잔액","잔액","현재 보유","현재보유"),
@@ -894,7 +894,26 @@ function Dashboard({ country, parsedData, onBack }) {
             <Card icon="📋" label="총 환불 주문" value={fmt(stats.totalOrders)} sub="건수 기준" color="#3b82f6"/>
             <Card icon="🔄" label="회수 처리" value={fmt(stats.recovered)} sub={`${stats.totalAbuseUnique?Math.round(stats.recovered/stats.totalAbuseUnique*100):0}%`} color="#22d3ee"/>
             <Card icon="🚫" label="제재 처리" value={fmt(stats.sanctioned)} sub={`${stats.totalAbuseUnique?Math.round(stats.sanctioned/stats.totalAbuseUnique*100):0}%`} color="#ef4444"/>
-            <Card icon={country==="한국"?"💰":"💴"} label="환불 금액" value={`${currencySymbol}${fmt(Math.round(stats.amountTotal))}`} sub={currencyCode} color="#f59e0b"/>
+            {country==="ETC" ? (()=>{
+              const byCurrency = {};
+              filtered.forEach(d=>{ if(d.amount>0) byCurrency[d.currency]=(byCurrency[d.currency]||0)+Math.abs(d.amount||0); });
+              const entries = Object.entries(byCurrency).sort((a,b)=>b[1]-a[1]);
+              return (
+                <div style={{background:"linear-gradient(135deg,#0d1b2e,#0a1220)",borderRadius:14,padding:"14px 18px",border:"1px solid #f59e0b33",borderLeft:"4px solid #f59e0b",position:"relative",overflow:"hidden"}}>
+                  <div style={{fontSize:10,color:"#2d4a6e",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.06em"}}>💱 환불 금액 (통화별)</div>
+                  <div style={{maxHeight:90,overflowY:"auto"}}>
+                    {entries.length===0 ? <div style={{fontSize:18,fontWeight:800,color:"#f59e0b"}}>0</div> :
+                      entries.map(([c,v])=>(
+                        <div key={c} style={{display:"flex",justifyContent:"space-between",fontSize:12,fontWeight:700,color:"#f59e0b",borderBottom:"1px solid #1e3a5f22",padding:"2px 0"}}>
+                          <span style={{color:"#4a6fa5"}}>{c}</span>
+                          <span>{fmt(Math.round(v))}</span>
+                        </div>
+                      ))
+                    }
+                  </div>
+                </div>
+              );
+            })() : <Card icon={country==="한국"?"💰":"💴"} label="환불 금액" value={`${currencySymbol}${fmt(Math.round(stats.amountTotal))}`} sub={currencyCode} color="#f59e0b"/>}
           </div>
           <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:12,marginBottom:12}}>
             <div style={{background:"#0d1b2e",borderRadius:14,padding:18,border:"1px solid #1e3a5f"}}>
