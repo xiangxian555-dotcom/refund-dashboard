@@ -200,9 +200,9 @@ export default async function handler(req, res) {
 
             const yText = String(row[yColIdx] || "").trim();
             const status = classifyJapan(yText);
+            if (!status) continue; // 처리결과 없는 행은 스킵
 
-            const date = extractJapanDate(yText);
-            if (!date) continue;
+            const date = extractJapanDate(yText) || "";
 
             allRows.push({
               openid,
