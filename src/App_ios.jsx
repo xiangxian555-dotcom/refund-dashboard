@@ -594,10 +594,10 @@ function Dashboard({ country, parsedData, onBack }) {
     try {
       const res = await fetch("/api/sheets-ios?country="+encodeURIComponent(country));
       const data = await res.json();
-      if (data.success && data.data.length>0) {
-        setResponseData(data.data);
+      if (data.success) {
+        setResponseData(data.data || []);
         setLastFetch(new Date().toLocaleTimeString());
-        setSheetStatus({ label:GSHEET_TARGETS[country]?.label, count:data.data.length, ok:true });
+        setSheetStatus({ label:GSHEET_TARGETS[country]?.label, count:(data.data||[]).length, ok:true });
       } else {
         setSheetErr(data.error||"데이터를 불러오지 못했어요.");
         setSheetStatus({ ok:false });
