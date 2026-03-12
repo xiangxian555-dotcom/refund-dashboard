@@ -195,7 +195,12 @@ export default async function handler(req, res) {
             const row = rows[i];
             const rawOid = row[ci.openid];
             if (!rawOid && rawOid !== 0) continue;
-            const openid = String(rawOid).trim().replace(/\.0+$/, "");
+            // 과학적 표기법 및 소수점 처리 (예: 3.69e+15 → 3691062078342441)
+            let openid = String(rawOid).trim();
+            if (/e[+\-]/i.test(openid)) {
+              try { openid = String(Math.round(parseFloat(openid))); } catch(ex) {}
+            }
+            openid = openid.replace(/\.0+$/, "");
             if (!openid) continue;
             const truncatedOid = openid.length >= 15 ? openid.slice(0, 15) : openid;
 
