@@ -77,9 +77,9 @@ export default async function handler(req, res) {
 
   const countryFilter = req.query.country || null;
 
-  // ETC는 한국 + 일본 시트 모두 로드 (KRW/JPY 외 통화 유저 포함)
+  // ETC는 한국 시트만 로드
   const targetTabs = countryFilter === "ETC"
-    ? SHEET_TABS // 한국 + 일본 시트 모두
+    ? SHEET_TABS.filter(t => t.country === "한국")
     : countryFilter
       ? SHEET_TABS.filter(t => t.country === countryFilter)
       : SHEET_TABS;
