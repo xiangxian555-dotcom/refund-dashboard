@@ -564,9 +564,11 @@ function Dashboard({ country, parsedData, onBack }) {
 
   const allAbuseMap = useMemo(() => {
     const map = {};
-    parsedData.abuseRows.filter(a=>a.country===country).forEach(a=>{
-      if(a.openid) map[normalizeOid(a.openid)]=a;
-    });
+    parsedData.abuseRows
+      .filter(a => country==="ETC" ? (a.country!=="한국"&&a.country!=="일본") : a.country===country)
+      .forEach(a=>{
+        if(a.openid) map[normalizeOid(a.openid)]=a;
+      });
     return map;
   }, [parsedData, country]);
 
