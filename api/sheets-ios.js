@@ -178,7 +178,6 @@ export default async function handler(req, res) {
           const openidIdx = findCol("OPEN ID","openid","OpenID") >= 0
             ? findCol("OPEN ID","openid","OpenID") : 4;
           const ci = { openid: openidIdx };
-          console.log(`[iOS일본] headerIdx:${headerIdx} openidIdx:${openidIdx} yColIdx:${yColIdx}`);
 
           // Y열(코멘트) 찾기
           let yColIdx = headers.length - 1;
@@ -190,6 +189,7 @@ export default async function handler(req, res) {
               yColIdx = c; break;
             }
           }
+          console.log(`[iOS일본] headerIdx:${headerIdx} openidIdx:${openidIdx} yColIdx:${yColIdx} 헤더샘플:`, JSON.stringify(headers.slice(0,6)));
 
           for (let i = headerIdx + 1; i < rows.length; i++) {
             const row = rows[i];
