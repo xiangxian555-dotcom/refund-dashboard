@@ -158,9 +158,10 @@ export default async function handler(req, res) {
 
         // ━━━ 일본 시트 파싱 ━━━
         else {
+          // 헤더 행 찾기 — OPEN ID 또는 キャラID 텍스트가 있는 행
           let headerIdx = 3;
           for (let i = 0; i < Math.min(10, rows.length); i++) {
-            if (rows[i].some(c => /^open.?id$/i.test((c || "").trim()))) {
+            if (rows[i].some(c => /open.?id|キャラ|오픈/i.test((c || "").trim()))) {
               headerIdx = i; break;
             }
           }
@@ -173,7 +174,9 @@ export default async function handler(req, res) {
             return -1;
           };
 
-          const openidIdx = findCol("OPEN ID","openid") >= 0 ? findCol("OPEN ID","openid") : 4;
+          // OpenID 열 찾기 — C열(index 2) 기본값
+          const openidIdx = findCol("OPEN ID","openid","キャラID","キャラ","오픈") >= 0
+            ? findCol("OPEN ID","openid","キャラID","キャラ","오픈") : 2;
           const ci = { openid: openidIdx };
 
           // Y열(코멘트) 찾기
