@@ -77,6 +77,13 @@ export default async function handler(req, res) {
 
   const countryFilter = req.query.country || null;
 
+  // ETC는 한국 + 일본 시트 모두 로드 (KRW/JPY 외 통화 유저 포함)
+  const targetTabs = countryFilter === "ETC"
+    ? SHEET_TABS // 한국 + 일본 시트 모두
+    : countryFilter
+      ? SHEET_TABS.filter(t => t.country === countryFilter)
+      : SHEET_TABS;
+
   try {
     const keyJson = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY);
     const auth = new google.auth.GoogleAuth({
@@ -86,10 +93,6 @@ export default async function handler(req, res) {
 
     const sheets = google.sheets({ version: "v4", auth });
     const allRows = [];
-
-    const targetTabs = countryFilter
-      ? SHEET_TABS.filter(t => t.country === countryFilter)
-      : SHEET_TABS;
 
     for (const tab of targetTabs) {
       try {
