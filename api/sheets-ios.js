@@ -60,13 +60,13 @@ function classifyJapan(yText) {
   const lines = normalized.split("\n").map(l => l.trim()).filter(Boolean);
   const lastLine = lines[lines.length - 1] || "";
 
-  if (/BAN処理済み|再度BAN|期限が過ぎたためBAN|チャージがなかったため.*BAN|課金しないで停止|停止いたしました|再制裁/.test(lastLine)) return "재제재";
-  if (/回収完了|回収いたしました|UCを回収|回収済み|回収を行った|回収案内|UC回収/.test(lastLine)) return "복구완료";
+  if (/BAN処理済み|再度BAN|期限が過ぎたためBAN|チャージがなかったため.*BAN|課金しないで停止|停止いたしました|再制裁|BAN維持|BANを維持|再支払いなして停止|再支払いなしで停止|再Ban|再BAN/.test(lastLine)) return "재제재";
+  if (/回収完了|回収いたしました|UCを回収|回収済み|回収を行った|回収案内|UC回収|回収完了案内|回収完了案内済|UCの回収を行った|uc 回収|uc回収/.test(lastLine)) return "복구완료";
 
   for (let i = lines.length - 1; i >= 0; i--) {
     const l = lines[i];
-    if (/BAN処理済み|再度BAN|期限が過ぎたためBAN|チャージがなかったため.*BAN|課金しないで停止|停止いたしました|再制裁/.test(l)) return "재제재";
-    if (/回収完了|回収いたしました|UCを回収|回収済み|回収を行った|回収案内|UC回収/.test(l)) return "복구완료";
+    if (/BAN処理済み|再度BAN|期限が過ぎたためBAN|チャージがなかったため.*BAN|課金しないで停止|停止いたしました|再制裁|BAN維持|BANを維持|再支払いなして停止|再支払いなしで停止|再Ban|再BAN/.test(l)) return "재제재";
+    if (/回収完了|回収いたしました|UCを回収|回収済み|回収を行った|回収案内|UC回収|回収完了案内|回収完了案内済|UCの回収を行った|uc 回収|uc回収/.test(l)) return "복구완료";
   }
   return null;
 }
@@ -174,10 +174,11 @@ export default async function handler(req, res) {
             return -1;
           };
 
-          // OpenID 열 찾기 — C열(index 2) 기본값
-          const openidIdx = findCol("OPEN ID","openid","キャラID","キャラ","오픈") >= 0
-            ? findCol("OPEN ID","openid","キャラID","キャラ","오픈") : 2;
+          // OpenID 열 찾기 — E열(index 4) 기본값
+          const openidIdx = findCol("OPEN ID","openid","OpenID") >= 0
+            ? findCol("OPEN ID","openid","OpenID") : 4;
           const ci = { openid: openidIdx };
+          console.log(`[iOS일본] headerIdx:${headerIdx} openidIdx:${openidIdx} yColIdx:${yColIdx}`);
 
           // Y열(코멘트) 찾기
           let yColIdx = headers.length - 1;
