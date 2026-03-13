@@ -752,6 +752,12 @@ function Dashboard({ country, parsedData, onBack }) {
         // iOS: OrderID 시트에서 OpenID 기준 금액 합산
         const amt = orderIdAmountMap[normOid] || 0;
         g[yr][mo].recoveredAmount += amt;
+        // ETC: 통화별 상세 저장
+        const currencyDetail = orderIdCurrencyMap[normOid] || {};
+        Object.entries(currencyDetail).forEach(([cur, val]) => {
+          if(!g[yr][mo].recoveredByCurrency) g[yr][mo].recoveredByCurrency = {};
+          g[yr][mo].recoveredByCurrency[cur] = (g[yr][mo].recoveredByCurrency[cur]||0) + val;
+        });
         if(amt>0) g[yr][mo].recoveredOrders.push({openid:a.openid, orderNo:"-", amount:amt});
       } else if(sv?.status==="재제재") g[yr][mo].resanctioned++;
     });
@@ -1158,12 +1164,28 @@ function Dashboard({ country, parsedData, onBack }) {
                                     </td>
                                     <td style={{padding:"5px 8px",color:"#22c55e",textAlign:"center"}}>{m.sanctioned?Math.round((m.recovered||0)/m.sanctioned*100):0}%</td>
                                     <td style={{padding:"5px 8px",color:"#a78bfa",textAlign:"center"}}>
-                                      <HoverTooltip lines={[
-                                        {label:"💰 주문 상세", value:`${currencySymbol}${fmt(Math.round(m.recoveredAmount||0))}`, color:"#a78bfa"},
-                                        ...(m.recoveredOrders||[]).map((o,i)=>({label:o.orderNo||`주문${i+1}`, value:`${o.openid?.slice(0,10)}… ${currencySymbol}${fmt(Math.round(o.amount))}`, color:"#c8d8f0", mono:true}))
-                                      ]}>
-                                        {currencySymbol}{fmt(Math.round(m.recoveredAmount||0))}
-                                      </HoverTooltip>
+                                      {country==="ETC" ? (()=>{
+                                        const bc = m.recoveredByCurrency || {};
+                                        const entries = Object.entries(bc).sort((a,b)=>b[1]-a[1]);
+                                        if(!entries.length) return <span style={{color:"#2d4a6e"}}>—</span>;
+                                        return (
+                                          <HoverTooltip lines={[
+                                            {label:"💰 통화별 복구금액", value:"클릭시 복사", color:"#a78bfa"},
+                                            ...entries.map(([c,v])=>({label:c, value:fmt(Math.round(v)), color:"#c8d8f0", mono:true}))
+                                          ]}>
+                                            <span style={{cursor:"pointer"}} onClick={e=>{e.stopPropagation();navigator.clipboard?.writeText(entries.map(([c,v])=>`${c}: ${fmt(Math.round(v))}`).join("\n"));}}>
+                                              {entries.slice(0,1).map(([c,v])=>`${c} ${fmt(Math.round(v))}`).join("")}{entries.length>1?` +${entries.length-1}`:""} 📋
+                                            </span>
+                                          </HoverTooltip>
+                                        );
+                                      })() : (
+                                        <HoverTooltip lines={[
+                                          {label:"💰 주문 상세", value:`${currencySymbol}${fmt(Math.round(m.recoveredAmount||0))}`, color:"#a78bfa"},
+                                          ...(m.recoveredOrders||[]).map((o,i)=>({label:o.orderNo||`주문${i+1}`, value:`${o.openid?.slice(0,10)}… ${currencySymbol}${fmt(Math.round(o.amount))}`, color:"#c8d8f0", mono:true}))
+                                        ]}>
+                                          {currencySymbol}{fmt(Math.round(m.recoveredAmount||0))}
+                                        </HoverTooltip>
+                                      )}
                                     </td>
                                     <td style={{padding:"5px 8px",color:"#f59e0b",textAlign:"center"}}>{fmt(m.resanctioned||0)}</td>
                                     <td style={{padding:"5px 8px",color:"#f59e0b",textAlign:"center"}}>{m.sanctioned?Math.round((m.resanctioned||0)/m.sanctioned*100):0}%</td>
@@ -1175,7 +1197,24 @@ function Dashboard({ country, parsedData, onBack }) {
                                   <td style={{padding:"5px 8px",color:"#ef4444",textAlign:"center"}}>{fmt(months.reduce((s,m)=>s+(m.sanctioned||0),0))}</td>
                                   <td style={{padding:"5px 8px",color:"#22c55e",textAlign:"center"}}>{fmt(months.reduce((s,m)=>s+(m.recovered||0),0))}</td>
                                   <td style={{padding:"5px 8px",color:"#22c55e",textAlign:"center"}}>{(()=>{const ts=months.reduce((s,m)=>s+(m.sanctioned||0),0);const tr=months.reduce((s,m)=>s+(m.recovered||0),0);return ts?Math.round(tr/ts*100):0;})()}%</td>
-                                  <td style={{padding:"5px 8px",color:"#a78bfa",textAlign:"center"}}>{currencySymbol}{fmt(Math.round(months.reduce((s,m)=>s+(m.recoveredAmount||0),0)))}</td>
+                                  <td style={{padding:"5px 8px",color:"#a78bfa",textAlign:"center"}}>
+                                    {country==="ETC" ? (()=>{
+                                      const bc = {};
+                                      months.forEach(m=>{ Object.entries(m.recoveredByCurrency||{}).forEach(([c,v])=>{ bc[c]=(bc[c]||0)+v; }); });
+                                      const entries = Object.entries(bc).sort((a,b)=>b[1]-a[1]);
+                                      if(!entries.length) return <span style={{color:"#2d4a6e"}}>—</span>;
+                                      return (
+                                        <HoverTooltip lines={[
+                                          {label:"💰 통화별 합계", value:"클릭시 복사", color:"#a78bfa"},
+                                          ...entries.map(([c,v])=>({label:c, value:fmt(Math.round(v)), color:"#c8d8f0", mono:true}))
+                                        ]}>
+                                          <span style={{cursor:"pointer",color:"#a78bfa"}} onClick={e=>{e.stopPropagation();navigator.clipboard?.writeText(entries.map(([c,v])=>`${c}: ${fmt(Math.round(v))}`).join("\n"));}}>
+                                            — 📋
+                                          </span>
+                                        </HoverTooltip>
+                                      );
+                                    })() : <>{currencySymbol}{fmt(Math.round(months.reduce((s,m)=>s+(m.recoveredAmount||0),0)))}</>}
+                                  </td>
                                   <td style={{padding:"5px 8px",color:"#f59e0b",textAlign:"center"}}>{fmt(months.reduce((s,m)=>s+(m.resanctioned||0),0))}</td>
                                   <td style={{padding:"5px 8px",color:"#f59e0b",textAlign:"center"}}>{(()=>{const ts=months.reduce((s,m)=>s+(m.sanctioned||0),0);const tr=months.reduce((s,m)=>s+(m.resanctioned||0),0);return ts?Math.round(tr/ts*100):0;})()}%</td>
                                 </tr>
@@ -1198,7 +1237,24 @@ function Dashboard({ country, parsedData, onBack }) {
                       <td style={{padding:"7px 10px",color:"#ef4444",textAlign:"center"}}>{fmt(totSanc)}</td>
                       <td style={{padding:"7px 10px",color:"#22c55e",textAlign:"center"}}>{fmt(totRec)}</td>
                       <td style={{padding:"7px 10px",color:"#22c55e",textAlign:"center"}}>{totSanc?Math.round(totRec/totSanc*100):0}%</td>
-                      <td style={{padding:"7px 10px",color:"#a78bfa",textAlign:"center"}}>{currencySymbol}{fmt(Math.round(Object.values(yearlyAbuseStats).reduce((s,v)=>s+(v.recoveredAmount||0),0)))}</td>
+                      <td style={{padding:"7px 10px",color:"#a78bfa",textAlign:"center"}}>
+                        {country==="ETC" ? (()=>{
+                          const bc = {};
+                          Object.values(yearlyAbuseStats).forEach(v=>{ Object.entries(v.recoveredByCurrency||{}).forEach(([c,amt])=>{ bc[c]=(bc[c]||0)+amt; }); });
+                          const entries = Object.entries(bc).sort((a,b)=>b[1]-a[1]);
+                          if(!entries.length) return <span style={{color:"#2d4a6e"}}>—</span>;
+                          return (
+                            <HoverTooltip lines={[
+                              {label:"💰 전체 통화별 합계", value:"클릭시 복사", color:"#a78bfa"},
+                              ...entries.map(([c,v])=>({label:c, value:fmt(Math.round(v)), color:"#c8d8f0", mono:true}))
+                            ]}>
+                              <span style={{cursor:"pointer",color:"#a78bfa"}} onClick={e=>{e.stopPropagation();navigator.clipboard?.writeText(entries.map(([c,v])=>`${c}: ${fmt(Math.round(v))}`).join("\n"));}}>
+                                — 📋
+                              </span>
+                            </HoverTooltip>
+                          );
+                        })() : <>{currencySymbol}{fmt(Math.round(Object.values(yearlyAbuseStats).reduce((s,v)=>s+(v.recoveredAmount||0),0)))}</>}
+                      </td>
                       <td style={{padding:"7px 10px",color:"#f59e0b",textAlign:"center"}}>{fmt(totRes)}</td>
                       <td style={{padding:"7px 10px",color:"#f59e0b",textAlign:"center"}}>{totSanc?Math.round(totRes/totSanc*100):0}%</td>
                     </tr>);
