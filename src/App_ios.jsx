@@ -664,12 +664,23 @@ function Dashboard({ country, parsedData, onBack }) {
     return Object.values(g).sort((a,b)=>a.year.localeCompare(b.year));
   }, [allOrderRows]);
 
-  // iOS: OrderID 시트를 openid 기준으로 금액 합산 맵 생성
+  // iOS: OrderID 시트를 openid 기준으로 금액 합산 맵 + 통화별 상세 맵 생성
   const orderIdAmountMap = useMemo(() => {
     const map = {};
     allOrderRows.filter(d=>d.type==="OrderID"&&d.openid).forEach(d=>{
       const key = normalizeOid(d.openid);
       map[key] = (map[key]||0) + Math.abs(d.amount||0);
+    });
+    return map;
+  }, [allOrderRows]);
+
+  // iOS ETC: OpenID별 통화+금액 상세 맵 (통화별 표시용)
+  const orderIdCurrencyMap = useMemo(() => {
+    const map = {};
+    allOrderRows.filter(d=>d.type==="OrderID"&&d.openid).forEach(d=>{
+      const key = normalizeOid(d.openid);
+      if(!map[key]) map[key] = {};
+      map[key][d.currency] = (map[key][d.currency]||0) + Math.abs(d.amount||0);
     });
     return map;
   }, [allOrderRows]);
@@ -690,13 +701,20 @@ function Dashboard({ country, parsedData, onBack }) {
         // iOS: OrderID 시트에서 OpenID 기준 금액 합산
         const amt = orderIdAmountMap[normOid] || 0;
         g[year].recoveredAmount += amt;
+        // ETC: 통화별 상세 저장
+        const currencyDetail = orderIdCurrencyMap[normOid] || {};
+        Object.entries(currencyDetail).forEach(([cur, val]) => {
+          if(!g[year].recoveredByCurrency) g[year].recoveredByCurrency = {};
+          g[year].recoveredByCurrency[cur] = (g[year].recoveredByCurrency[cur]||0) + val;
+        });
         if(amt>0) g[year].recoveredOrders.push({
-          openid: a.openid, orderNo: "-", amount: amt
+          openid: a.openid, orderNo: "-", amount: amt,
+          currencies: currencyDetail
         });
       } else if(sv?.status==="재제재") g[year].resanctioned++;
     });
     return g;
-  }, [allAbuseRows, allOrderRows, sheetOidMap, orderIdAmountMap]);
+  }, [allAbuseRows, allOrderRows, sheetOidMap, orderIdAmountMap, orderIdCurrencyMap]);
 
   // 연도별 분석 - 월별 상세 데이터
   const monthlyStats = useMemo(() => {
@@ -892,9 +910,16 @@ function Dashboard({ country, parsedData, onBack }) {
               const byCurrency = {};
               filtered.forEach(d=>{ if(d.amount>0) byCurrency[d.currency]=(byCurrency[d.currency]||0)+Math.abs(d.amount||0); });
               const entries = Object.entries(byCurrency).sort((a,b)=>b[1]-a[1]);
+              const copyText = entries.map(([c,v])=>`${c}: ${fmt(Math.round(v))}`).join("\n");
               return (
                 <div style={{background:"linear-gradient(135deg,#0d1b2e,#0a1220)",borderRadius:14,padding:"14px 18px",border:"1px solid #f59e0b33",borderLeft:"4px solid #f59e0b",position:"relative",overflow:"hidden"}}>
-                  <div style={{fontSize:10,color:"#2d4a6e",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.06em"}}>💱 환불 금액 (통화별)</div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                    <div style={{fontSize:10,color:"#2d4a6e",textTransform:"uppercase",letterSpacing:"0.06em"}}>💱 환불 금액 (통화별)</div>
+                    <button onClick={()=>navigator.clipboard?.writeText(copyText)}
+                      style={{padding:"2px 8px",borderRadius:5,border:"1px solid #f59e0b44",background:"transparent",color:"#f59e0b",cursor:"pointer",fontSize:9,fontWeight:700}}>
+                      📋 복사
+                    </button>
+                  </div>
                   <div style={{maxHeight:90,overflowY:"auto"}}>
                     {entries.length===0 ? <div style={{fontSize:18,fontWeight:800,color:"#f59e0b"}}>0</div> :
                       entries.map(([c,v])=>(
@@ -945,7 +970,7 @@ function Dashboard({ country, parsedData, onBack }) {
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
                 <thead>
                   <tr style={{background:"#060d18",borderBottom:"1px solid #1e3a5f"}}>
-                    {[{l:"연도",c:"#2d4a6e"},{l:"월",c:"#2d4a6e"},{l:"주문건수",c:"#3b82f6"},{l:"환불금액",c:"#f59e0b"}].map(({l,c})=>(
+                    {[{l:"연도",c:"#2d4a6e"},{l:"월",c:"#2d4a6e"},{l:"주문건수",c:"#3b82f6"},...(country!=="ETC"?[{l:"환불금액",c:"#f59e0b"}]:[])].map(({l,c})=>(
                       <th key={l} style={{padding:"9px 12px",textAlign:"center",color:c,fontWeight:600,whiteSpace:"nowrap"}}>{l}</th>
                     ))}
                   </tr>
@@ -960,7 +985,7 @@ function Dashboard({ country, parsedData, onBack }) {
                         <td style={{padding:"7px 12px",color:"#4a6fa5",textAlign:"center"}}>{row.year}년</td>
                         <td style={{padding:"7px 12px",color:"#c8d8f0",textAlign:"center",fontWeight:600}}>{m.month}</td>
                         <td style={{padding:"7px 12px",color:"#3b82f6",textAlign:"center",fontWeight:700}}>{fmt(m.orders)}</td>
-                        <td style={{padding:"7px 12px",color:"#f59e0b",textAlign:"center",fontWeight:700}}>{currencySymbol}{fmt(Math.round(m.amount))}</td>
+                        {country!=="ETC"&&<td style={{padding:"7px 12px",color:"#f59e0b",textAlign:"center",fontWeight:700}}>{currencySymbol}{fmt(Math.round(m.amount))}</td>}
                       </tr>
                     ));
                     const sub = months.reduce((s,m)=>({orders:s.orders+m.orders,amount:s.amount+m.amount}),{orders:0,amount:0});
@@ -969,7 +994,7 @@ function Dashboard({ country, parsedData, onBack }) {
                         <td style={{padding:"7px 12px",color:"#e8f4ff",textAlign:"center"}}>{row.year}년 소계</td>
                         <td style={{padding:"7px 12px",color:"#2d4a6e",textAlign:"center"}}>—</td>
                         <td style={{padding:"7px 12px",color:"#3b82f6",textAlign:"center"}}>{fmt(sub.orders)}</td>
-                        <td style={{padding:"7px 12px",color:"#f59e0b",textAlign:"center"}}>{currencySymbol}{fmt(Math.round(sub.amount))}</td>
+                        {country!=="ETC"&&<td style={{padding:"7px 12px",color:"#f59e0b",textAlign:"center"}}>{currencySymbol}{fmt(Math.round(sub.amount))}</td>}
                       </tr>
                     );
                     return rows;
@@ -977,7 +1002,7 @@ function Dashboard({ country, parsedData, onBack }) {
                   <tr style={{background:"#0a1528",borderTop:"2px solid #3b82f644",fontWeight:800}}>
                     <td colSpan={2} style={{padding:"9px 12px",color:"#e8f4ff",textAlign:"center"}}>합계</td>
                     <td style={{padding:"9px 12px",color:"#3b82f6",textAlign:"center"}}>{fmt(stats.totalOrders)}</td>
-                    <td style={{padding:"9px 12px",color:"#f59e0b",textAlign:"center"}}>{currencySymbol}{fmt(Math.round(stats.amountTotal))}</td>
+                    {country!=="ETC"&&<td style={{padding:"9px 12px",color:"#f59e0b",textAlign:"center"}}>{currencySymbol}{fmt(Math.round(stats.amountTotal))}</td>}
                   </tr>
                 </tbody>
               </table>
@@ -1075,12 +1100,30 @@ function Dashboard({ country, parsedData, onBack }) {
                         </td>
                         <td style={{padding:"7px 10px",color:"#22c55e",textAlign:"center"}}>{yas.sanctioned?Math.round(yas.recovered/yas.sanctioned*100):0}%</td>
                         <td style={{padding:"7px 10px",color:"#a78bfa",textAlign:"center",fontWeight:700}}>
-                          <HoverTooltip lines={[
-                            {label:"💰 복구금액 주문 상세", value:`총 ${currencySymbol}${fmt(Math.round(yas.recoveredAmount||0))}`, color:"#a78bfa"},
-                            ...(yas.recoveredOrders||[]).map((o,i)=>({label:o.orderNo||`주문${i+1}`, value:`${o.openid?.slice(0,10)}… ${currencySymbol}${fmt(Math.round(o.amount))}`, color:"#c8d8f0", mono:true}))
-                          ]}>
-                            {currencySymbol}{fmt(Math.round(yas.recoveredAmount||0))}
-                          </HoverTooltip>
+                          {country==="ETC" ? (()=>{
+                            const bc = yas.recoveredByCurrency || {};
+                            const entries = Object.entries(bc).sort((a,b)=>b[1]-a[1]);
+                            const copyText = entries.map(([c,v])=>`${c}: ${fmt(Math.round(v))}`).join("\n");
+                            if(!entries.length) return <span>—</span>;
+                            return (
+                              <HoverTooltip lines={[
+                                {label:"💰 통화별 복구금액", value:"클릭시 고정·복사", color:"#a78bfa"},
+                                ...entries.map(([c,v])=>({label:c, value:fmt(Math.round(v)), color:"#c8d8f0", mono:true}))
+                              ]}>
+                                <span style={{cursor:"pointer"}} onClick={e=>{e.stopPropagation();navigator.clipboard?.writeText(copyText);}}>
+                                  {entries.slice(0,2).map(([c,v])=>`${c} ${fmt(Math.round(v))}`).join(" / ")}
+                                  {entries.length>2?` +${entries.length-2}`:""} 📋
+                                </span>
+                              </HoverTooltip>
+                            );
+                          })() : (
+                            <HoverTooltip lines={[
+                              {label:"💰 복구금액 주문 상세", value:`총 ${currencySymbol}${fmt(Math.round(yas.recoveredAmount||0))}`, color:"#a78bfa"},
+                              ...(yas.recoveredOrders||[]).map((o,i)=>({label:o.orderNo||`주문${i+1}`, value:`${o.openid?.slice(0,10)}… ${currencySymbol}${fmt(Math.round(o.amount))}`, color:"#c8d8f0", mono:true}))
+                            ]}>
+                              {currencySymbol}{fmt(Math.round(yas.recoveredAmount||0))}
+                            </HoverTooltip>
+                          )}
                         </td>
                         <td style={{padding:"7px 10px",color:"#f59e0b",textAlign:"center",fontWeight:700}}>{fmt(yas.resanctioned)}</td>
                         <td style={{padding:"7px 10px",color:"#f59e0b",textAlign:"center"}}>{yas.sanctioned?Math.round(yas.resanctioned/yas.sanctioned*100):0}%</td>
